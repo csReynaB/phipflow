@@ -1,0 +1,928 @@
+---
+title: "PHIPER summary report"
+author: 
+  - name: "Mateusz F. Kolek"
+  - name: "Carlos S. Reyna-Blanco"
+date: today
+date-format: "MMMM D, YYYY"
+description: "Automated PhIP-Seq report for group-level comparison and feature-level interpretation."
+format:
+  html:
+    title-block-banner: true
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    code-summary: "Show code"
+    smooth-scroll: true
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  base_dir: null # passed at runtime, e.g. "SAR/results"
+  group_col: null # passed at runtime, e.g. "group_test"
+  top_n: 500
+  tables_open: false
+  include_beta_tables: false
+  include_alpha_tables: false
+  include_tsne3d: true
+  include_longitudinal_stability: true
+  include_pop_tables: true
+  include_pop_plots: true
+  include_delta_tables: true
+  include_delta_feature_plots: true
+  pop_interactive_mode: "link"      # one of: "none", "link", "embed"
+  delta_interactive_mode: "embed"    # one of: "none", "link", "embed"
+  max_delta_feature_plots: 5
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(fs)
+  library(dplyr)
+  library(readr)
+  library(readxl)
+  library(stringr)
+  library(glue)
+  library(knitr)
+  library(htmltools)
+  library(tibble)
+  library(purrr)
+  library(DT)
+})
+
+base_dir  <- params$base_dir
+group_col <- params$group_col
+if (is.null(base_dir) || !nzchar(base_dir)) {
+  stop("Missing required Quarto parameter: base_dir")
+}
+
+if (is.null(group_col) || !nzchar(group_col)) {
+  stop("Missing required Quarto parameter: group_col")
+}
+group_dir <- fs::path(base_dir, group_col)
+
+if (!fs::dir_exists(group_dir)) {
+  stop(glue("Group folder not found: {group_dir}"))
+}
+
+ignored_dirs <- c("phiper_summary_report_files")
+comparisons <- fs::dir_ls(group_dir, type = "directory") |>
+  basename() |>
+  (\(x) x[!grepl("phiper_summary", x)])() |>
+  setdiff(ignored_dirs) |>
+  sort()
+# comparisons <- fs::dir_ls(group_dir, type = "directory") |>
+#   basename()
+# comparisons <- comparisons[!grepl("phiper_summary", comparisons)]
+# comparisons <- setdiff(comparisons, ignored_dirs)
+# comparisons <- sort(comparisons)
+
+if ("all" %in% comparisons) {
+  comparisons <- c("all", setdiff(comparisons, "all"))
+}
+
+normalize_interactive_mode <- function(x, default = "link") {
+  x <- tolower(as.character(x %||% default))
+  if (!x %in% c("none", "link", "embed")) default else x
+}
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || is.na(x)) y else x
+
+pop_interactive_mode   <- normalize_interactive_mode(params$pop_interactive_mode, "link")
+delta_interactive_mode <- normalize_interactive_mode(params$delta_interactive_mode, "link")
+
+safe_rel_path <- function(x, start = group_dir) {
+  rel <- fs::path_rel(x, start = start)
+  rel <- gsub("%2F", "/", utils::URLencode(rel, reserved = TRUE))
+  rel
+}
+
+cat_md <- function(...) cat(..., sep = "")
+
+emit_heading <- function(text, level = 2) {
+  cat_md(strrep("#", level), " ", text, "\n\n")
+}
+
+emit_text <- function(text = "") {
+  cat_md(text, "\n\n")
+}
+
+emit_missing <- function(text = "_Not available._") {
+  emit_text(text)
+}
+
+emit_img <- function(file, caption = NULL, width = "100%") {
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+  src <- safe_rel_path(file)
+  alt <- if (is.null(caption)) basename(file) else caption
+  cat_md(glue('<div style="margin: 0.5rem 0 1rem 0;">\n'))
+  cat_md(glue('<img src="{src}" alt="{htmlEscape(alt)}" style="width:{width}; border:1px solid #e5e7eb; border-radius:8px;"/>\n'))
+  if (!is.null(caption)) {
+    cat_md(glue('<div style="font-size:0.92rem;color:#555;margin-top:0.35rem;">{htmlEscape(caption)}</div>\n'))
+  }
+  cat_md('</div>\n\n')
+}
+
+emit_img_grid <- function(files, labels = NULL, ncol = 2) {
+  files <- files[!is.na(files)]
+  files <- files[fs::file_exists(files)]
+  if (length(files) == 0) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+  if (is.null(labels)) labels <- basename(files)
+  cat_md(glue('<div style="display:grid;grid-template-columns:repeat({ncol}, minmax(0, 1fr));gap:24px;margin: 0.75rem 0 1.25rem 0;">\n'))
+  for (i in seq_along(files)) {
+    src <- safe_rel_path(files[[i]])
+    lab <- labels[[i]]
+    cat_md('<div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;">\n')
+    cat_md(glue('<img src="{src}" alt="{htmlEscape(lab)}" style="width:100%;"/>\n'))
+    cat_md(glue('<div style="font-size:0.95rem;color:#555;margin-top:0.5rem;">{htmlEscape(lab)}</div>\n'))
+    cat_md('</div>\n')
+  }
+  cat_md('</div>\n\n')
+}
+
+
+emit_iframe <- function(file, height = "700px") {
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+  src <- safe_rel_path(file)
+  cat_md(glue('<iframe src="{src}" style="width:100%;height:{height};border:1px solid #e5e7eb;border-radius:8px;"></iframe>\n\n'))
+}
+
+emit_link_list <- function(files, title = "Open interactive plots") {
+  files <- files[!is.na(files)]
+  files <- files[fs::file_exists(files)]
+  if (length(files) == 0) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+  cat_md(glue('<details><summary><strong>{htmlEscape(title)}</strong></summary>\n'))
+  cat_md('<ul>\n')
+  for (f in files) {
+    rel <- safe_rel_path(f)
+    nm  <- basename(f)
+    cat_md(glue('<li><a href="{rel}" target="_blank">{htmlEscape(nm)}</a></li>\n'))
+  }
+  cat_md('</ul>\n</details>\n\n')
+}
+
+read_table_auto <- function(file) {
+  ext <- tolower(fs::path_ext(file))
+  out <- switch(
+    ext,
+    csv  = readr::read_csv(file, show_col_types = FALSE, progress = FALSE),
+    xlsx = readxl::read_xlsx(file),
+    xls  = readxl::read_xls(file),
+    rds  = readRDS(file),
+    stop(glue("Unsupported table type: {file}"))
+  )
+
+  if (is.matrix(out)) out <- as.data.frame(out)
+  if (inherits(out, c("dist", "table"))) out <- as.data.frame(out)
+
+  if (!is.data.frame(out)) {
+    if (is.list(out) && length(out) > 0 && is.data.frame(out[[1]])) {
+      out <- out[[1]]
+    } else if (is.list(out) && length(out) > 0) {
+      out <- tibble::tibble(value = capture.output(str(out, max.level = 1)))
+    } else {
+      out <- tibble::tibble(value = capture.output(str(out)))
+    }
+  }
+
+  tibble::as_tibble(out)
+}
+
+prepare_table <- function(df, top_n = params$top_n) {
+  suppressWarnings({
+    if ("p_raw" %in% names(df) && "p_adj_rank_wbh" %in% names(df)) {
+      df <- df |> arrange(.data$p_adj_rank_wbh, .data$p_raw)
+    } else if ("p_raw" %in% names(df) && "p_adj_rank" %in% names(df)) {
+      df <- df |> arrange(.data$p_adj_rank, .data$p_raw)
+    } else if ("p_raw" %in% names(df)) {
+      df <- df |> arrange(.data$p_raw)
+    } else if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
+      df <- df |> arrange(desc(abs(.data$T_obs_stand)), .data$p_perm)
+    }
+  })
+
+  dplyr::slice_head(df, n = min(top_n, nrow(df)))
+}
+
+
+emit_dt_details <- function(file,
+                            title = basename(file),
+                            top_n = params$top_n,
+                            filter_fun = NULL) {
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+
+  df <- read_table_auto(file)
+
+  if (!is.null(filter_fun)) {
+    df <- filter_fun(df)
+  }
+
+  df <- prepare_table(df, top_n = top_n)
+
+  if (nrow(df) == 0) {
+    emit_missing("_Table exists but is empty after filtering._")
+    return(invisible(NULL))
+  }
+
+  assign(".dt_current_df", df, envir = knitr::knit_global())
+  assign(".dt_current_title", title, envir = knitr::knit_global())
+  assign(".dt_current_open", params$tables_open, envir = knitr::knit_global())
+
+  child <- knitr::knit_child(
+    text = c(
+      "```{r, echo=FALSE, warning=FALSE, message=FALSE}",
+      "if (isTRUE(.dt_current_open)) {",
+      "  htmltools::tagList(",
+      "    htmltools::tags$details(",
+      "      open = NA,",
+      "      htmltools::tags$summary(htmltools::tags$strong(.dt_current_title)),",
+      "      htmltools::tags$div(",
+      "        style = 'margin-top: 0.75rem;',",
+      "        DT::datatable(",
+      "          .dt_current_df,",
+      "          rownames = FALSE,",
+      "          filter = 'top',",
+      "          options = list(",
+      "            pageLength = 10,",
+      "            lengthMenu = c(10, 25, 50, 100),",
+      "            scrollX = TRUE,",
+      "            autoWidth = TRUE",
+      "          )",
+      "        )",
+      "      )",
+      "    )",
+      "  )",
+      "} else {",
+      "  htmltools::tagList(",
+      "    htmltools::tags$details(",
+      "      htmltools::tags$summary(htmltools::tags$strong(.dt_current_title)),",
+      "      htmltools::tags$div(",
+      "        style = 'margin-top: 0.75rem;',",
+      "        DT::datatable(",
+      "          .dt_current_df,",
+      "          rownames = FALSE,",
+      "          filter = 'top',",
+      "          options = list(",
+      "            pageLength = 10,",
+      "            lengthMenu = c(10, 25, 50, 100),",
+      "            scrollX = TRUE,",
+      "            autoWidth = TRUE",
+      "          )",
+      "        )",
+      "      )",
+      "    )",
+      "  )",
+      "}",
+      "```"
+    ),
+    quiet = TRUE
+  )
+
+  cat(child, sep = "\n")
+  invisible(NULL)
+}
+
+
+show_table <- function(file, title = basename(file), top_n = params$top_n, max_rows = 100) {
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+
+  df <- prepare_table(read_table_auto(file), top_n = top_n)
+
+  if (nrow(df) == 0) {
+    emit_missing("_Table exists but is empty._")
+    return(invisible(NULL))
+  }
+
+  if (!is.null(title) && nzchar(title)) {
+    cat_md(glue('<div style="font-weight:600;margin:0.5rem 0 0.5rem 0;">{htmlEscape(title)}</div>\n'))
+  }
+
+  tbl <- knitr::kable(
+    utils::head(df, max_rows),
+    format = "html",
+    escape = TRUE,
+    table.attr = 'class="table table-striped table-hover table-sm" style="width:100%;"'
+  )
+
+  cat_md(as.character(tbl), "\n")
+
+  if (nrow(df) > max_rows) {
+    cat_md(glue(
+      '<div style="font-size:0.9rem;color:#666;margin-top:0.35rem;">Showing first {max_rows} of {nrow(df)} rows.</div>\n'
+    ))
+  }
+
+  cat_md("\n")
+  invisible(NULL)
+}
+
+emit_table_details <- function(file, title = basename(file), top_n = params$top_n) {
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
+    emit_missing()
+    return(invisible(NULL))
+  }
+
+  cat_md(glue('<details><summary><strong>{htmlEscape(title)}</strong></summary>\n\n'))
+  show_table(file, title = NULL, top_n = top_n)
+  cat_md('\n</details>\n\n')
+}
+
+
+file_or_na <- function(...) {
+  f <- fs::path(...)
+  if (fs::file_exists(f)) f else NA_character_
+}
+
+safe_name <- function(feature_name) {
+  x <- gsub("[^A-Za-z0-9_-]+", "_", as.character(feature_name))
+  x <- gsub("_+", "_", x)
+  x <- gsub("^_|_$", "", x)
+  x
+}
+
+delta_ranks <- c("all", "species", "genus", "family", "order")
+
+find_delta_static_plots <- function(delta_dir, ranks = delta_ranks) {
+  files <- fs::path(delta_dir, paste0("significant_static_", ranks, "_forestplot.svg"))
+  names(files) <- ranks
+  files[fs::file_exists(files)]
+}
+
+find_delta_interactive_plots <- function(delta_dir, ranks = delta_ranks) {
+  files <- fs::path(delta_dir, paste0("significant_interactive_", ranks, "_forestplot.html"))
+  names(files) <- ranks
+  files[fs::file_exists(files)]
+}
+
+
+emit_delta_forest_tabs <- function(delta_dir,
+                                   interactive_mode = "link",
+                                   iframe_height = "720px",
+                                   include_feature_plots = FALSE,
+                                   max_feature_plots = 12) {
+  static_files <- find_delta_static_plots(delta_dir)
+  interactive_files <- find_delta_interactive_plots(delta_dir)
+
+  ranks_present <- unique(c(names(static_files), names(interactive_files)))
+
+  if (length(ranks_present) == 0) {
+    old_static <- file_or_na(delta_dir, "significant_static_forestplot.svg")
+    old_inter  <- file_or_na(delta_dir, "significant_interactive_forestplot.html")
+
+    if (!is.na(old_static) || (!is.na(old_inter) && interactive_mode != "none")) {
+      ranks_present <- "all"
+      if (!is.na(old_static)) static_files["all"] <- old_static
+      if (!is.na(old_inter))  interactive_files["all"] <- old_inter
+    }
+  }
+
+  if (length(ranks_present) == 0) {
+    emit_missing("_No DELTA forest plots available._")
+    return(invisible(NULL))
+  }
+
+  ranks_present <- delta_ranks[delta_ranks %in% ranks_present]
+
+  cat_md("::: {.panel-tabset}\n\n")
+
+  for (rk in ranks_present) {
+    tab_title <- stringr::str_to_title(rk)
+    emit_heading(tab_title, level = 4)
+
+    if (rk %in% names(static_files)) {
+      emit_img(
+        static_files[[rk]],
+        caption = paste(tab_title, "significant forest plot")
+      )
+    } else {
+      emit_missing("_Static forest plot not available._")
+    }
+
+    if (rk %in% names(interactive_files)) {
+      emit_interactive_html(
+        file   = interactive_files[[rk]],
+        title  = paste("Interactive", tab_title, "forest plot"),
+        mode   = interactive_mode,
+        height = iframe_height
+      )
+    }
+
+    if (isTRUE(include_feature_plots)) {
+      emit_heading(
+        paste("Top", max_feature_plots, stringr::str_to_title(rk), "individual DELTA feature plots"),
+        level = 5
+      )
+      emit_delta_feature_plots_for_rank(
+        delta_dir = delta_dir,
+        rank_name = rk,
+        top_n = max_feature_plots
+      )
+    }
+
+    cat_md("\n")
+  }
+
+  cat_md(":::\n\n")
+}
+
+
+emit_pop_scatter_tabs <- function(plots_dir,
+                                  interactive_mode = "link",
+                                  iframe_height = "720px") {
+  pop_ranks <- c("peptide_id", "species", "genus", "family", "order")
+
+  pretty_rank <- function(x) {
+    if (x == "peptide_id") return("Peptide ID")
+    stringr::str_to_title(gsub("_", " ", x))
+  }
+
+  static_files <- fs::path(plots_dir, paste0(pop_ranks, "_static.svg"))
+  names(static_files) <- pop_ranks
+  static_files <- static_files[fs::file_exists(static_files)]
+
+  interactive_files <- fs::path(plots_dir, paste0(pop_ranks, "_interactive.html"))
+  names(interactive_files) <- pop_ranks
+  interactive_files <- interactive_files[fs::file_exists(interactive_files)]
+
+  ranks_present <- union(names(static_files), names(interactive_files))
+
+  if (length(ranks_present) == 0) {
+    emit_missing("_No POP scatter plots available._")
+    return(invisible(NULL))
+  }
+
+  cat_md("::: {.panel-tabset}\n\n")
+
+  for (rk in ranks_present) {
+    tab_title <- pretty_rank(rk)
+    emit_heading(tab_title, level = 4)
+
+    if (rk %in% names(static_files)) {
+      emit_img(
+        static_files[[rk]],
+        caption = paste(tab_title, "static scatter plot")
+      )
+    } else {
+      emit_missing("_Static plot not available._")
+    }
+
+    if (rk %in% names(interactive_files)) {
+      emit_interactive_html(
+        file   = interactive_files[[rk]],
+        title  = paste("Interactive", tab_title, "plot"),
+        mode   = interactive_mode,
+        height = iframe_height
+      )
+    }
+
+    cat_md("\n")
+  }
+
+  cat_md(":::\n\n")
+}
+
+emit_interactive_html <- function(file,
+                                  title = "Interactive plot",
+                                  mode = c("link", "embed", "none"),
+                                  height = "720px") {
+  mode <- match.arg(mode)
+
+  if (length(file) == 0 || is.na(file) || !fs::file_exists(file) || mode == "none") {
+    return(invisible(NULL))
+  }
+
+  rel <- safe_rel_path(file)
+
+  cat_md(glue('<details><summary><strong>{htmlEscape(title)}</strong></summary>\n\n'))
+
+  if (mode == "embed") {
+    emit_iframe(file, height = height)
+  } else if (mode == "link") {
+    cat_md(glue('<p><a href="{rel}" target="_blank">Open interactive HTML</a></p>\n\n'))
+  }
+
+  cat_md('</details>\n\n')
+}
+
+get_delta_rank_table <- function(delta_dir, rank_name, top_n = 12) {
+  if (rank_name == "all") {
+    tbl_file <- file_or_na(delta_dir, "delta_table_interesting.csv")
+    if (is.na(tbl_file)) return(NULL)
+
+    df <- read_table_auto(tbl_file)
+
+    if (!"feature" %in% names(df)) return(NULL)
+
+    if (nrow(df) == 0) {
+      return(df)
+    }
+
+    if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
+      df <- df |>
+        dplyr::filter(!is.na(.data$feature), .data$feature != "") |>
+        dplyr::arrange(dplyr::desc(abs(.data$T_obs_stand)), .data$p_perm)
+    } else if ("p_perm" %in% names(df)) {
+      df <- df |>
+        dplyr::filter(!is.na(.data$feature), .data$feature != "") |>
+        dplyr::arrange(.data$p_perm)
+    } else {
+      df <- df |>
+        dplyr::filter(!is.na(.data$feature), .data$feature != "")
+    }
+
+    return(dplyr::slice_head(df, n = min(top_n, nrow(df))))
+  }
+
+  tbl_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5.csv")
+  if (is.na(tbl_file)) return(NULL)
+
+  df <- read_table_auto(tbl_file)
+
+  needed_cols <- c("rank", "feature")
+  if (!all(needed_cols %in% names(df))) return(NULL)
+
+  df <- df |>
+    dplyr::filter(.data$rank == rank_name)
+
+  if ("p_perm" %in% names(df)) {
+    df <- df |>
+      dplyr::filter(!is.na(.data$p_perm), .data$p_perm <= 0.05)
+  }
+
+  df <- df |>
+    dplyr::filter(!is.na(.data$feature), .data$feature != "")
+
+  if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
+    df <- df |>
+      dplyr::arrange(dplyr::desc(abs(.data$T_obs_stand)), .data$p_perm)
+  } else if ("p_perm" %in% names(df)) {
+    df <- df |>
+      dplyr::arrange(.data$p_perm)
+  }
+
+  dplyr::slice_head(df, n = min(top_n, nrow(df)))
+}
+
+emit_delta_feature_plots_for_rank <- function(delta_dir,
+                                              rank_name,
+                                              top_n = 12) {
+  feat_dir <- fs::path(delta_dir, "interesting_features")
+  if (!fs::dir_exists(feat_dir)) return(invisible(NULL))
+
+  rank_tbl <- get_delta_rank_table(delta_dir, rank_name, top_n = top_n)
+  if (is.null(rank_tbl) || nrow(rank_tbl) == 0 || !"feature" %in% names(rank_tbl)) {
+    emit_missing("_No significant DELTA features available for this rank._")
+    return(invisible(NULL))
+  }
+
+  ranked_features <- rank_tbl |>
+    dplyr::pull(.data$feature) |>
+    unique()
+
+  shown_idx <- 0L
+
+  for (feat in ranked_features) {
+    feat_safe <- safe_name(feat)
+
+    delta_file               <- fs::path(feat_dir, paste0(feat_safe, "_deltaplot_static.svg"))
+    ecdf_file                <- fs::path(feat_dir, paste0(feat_safe, "_ecdfplot_static.svg"))
+    scatter_file             <- fs::path(feat_dir, paste0(feat_safe, "_scatter_static.svg"))
+    scatter_interactive_file <- fs::path(feat_dir, paste0(feat_safe, "_scatter_interactive.html"))
+
+    has_delta               <- fs::file_exists(delta_file)
+    has_ecdf                <- fs::file_exists(ecdf_file)
+    has_scatter             <- fs::file_exists(scatter_file)
+    has_scatter_interactive <- fs::file_exists(scatter_interactive_file)
+
+    if (!(has_delta || has_ecdf || has_scatter || has_scatter_interactive)) next
+
+    shown_idx <- shown_idx + 1L
+
+    if (shown_idx == 1L) {
+      cat_md('<details open>\n')
+    } else {
+      cat_md('<details>\n')
+    }
+
+    cat_md(glue('<summary><strong>{htmlEscape(feat)}</strong></summary>\n\n'))
+    cat_md('<div style="margin-top:0.75rem;">\n')
+
+    # First row: Delta + ECDF
+    top_files <- c(delta_file, ecdf_file)[c(has_delta, has_ecdf)]
+    top_labels <- c(
+      paste0(feat, " — delta plot"),
+      paste0(feat, " — ECDF plot")
+    )[c(has_delta, has_ecdf)]
+
+    if (length(top_files) > 0) {
+      emit_img_grid(
+        files = top_files,
+        labels = top_labels,
+        ncol = 2
+      )
+    }
+
+    # Static scatter
+    if (has_scatter) {
+      src <- safe_rel_path(scatter_file)
+      cap <- paste0(feat, " — scatter plot")
+
+      cat_md('<div style="margin-top:-0.25rem;">\n')
+      cat_md('<div style="width:100%; aspect-ratio: 1 / 1; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">\n')
+      cat_md(glue('<img src="{src}" alt="{htmlEscape(cap)}" style="width:100%; height:100%; object-fit:contain; display:block; background:white;"/>\n'))
+      cat_md('</div>\n')
+      cat_md(glue('<div style="font-size:0.92rem;color:#555;margin-top:0.35rem;">{htmlEscape(cap)}</div>\n'))
+      cat_md('</div>\n\n')
+    }
+
+    # Direct link to interactive scatter HTML
+    if (has_scatter_interactive) {
+      rel_interactive <- safe_rel_path(scatter_interactive_file)
+      cat_md(
+        glue('<p style="margin-top:0.4rem; margin-bottom:0.2rem;">
+             <a href="{rel_interactive}" target="_blank">Open interactive scatter HTML</a>
+             </p>\n\n')
+      )
+    }
+
+    # Interactive scatter link in collapsed block
+    # if (has_scatter_interactive) {
+    #   emit_interactive_html(
+    #     file   = scatter_interactive_file,
+    #     title  = paste(feat, "— interactive scatter plot"),
+    #     mode   = "link",
+    #     height = "720px"
+    #   )
+    # }
+
+    cat_md('</div>\n')
+    cat_md('</details>\n\n')
+  }
+
+  if (shown_idx == 0L) {
+    emit_missing("_No matching individual DELTA feature plot files found for this rank._")
+  }
+
+  invisible(NULL)
+}
+```
+
+
+
+## Analysis summary
+
+```{r, results='asis'}
+phiper_version <- as.character(utils::packageVersion("phiper"))
+cat_md(glue("**PHIPER version:** `{phiper_version}`  \n"))
+base_dir_display <- fs::path_rel(base_dir, start = fs::path_dir(fs::path_dir(base_dir)))
+cat_md(glue("**Base results directory:** `{base_dir_display}`  \n"))
+cat_md(glue("**Group column:** `{group_col}`  \n"))
+cat_md(glue("**Comparisons detected:** {length(comparisons)}\n\n"))
+cat_md(paste0("- `", comparisons, "`", collapse = "\n"), "\n\n")
+cat_md(
+  "This report is designed to live **inside the selected group column folder** so that SVG and HTML outputs can be referenced with relative paths.  \n",
+  glue("POP interactive mode: `{pop_interactive_mode}`  \n"),
+  glue("DELTA interactive mode: `{delta_interactive_mode}`\n\n")
+)
+```
+
+## How to read this report
+
+This report summarizes PHIPER results for a grouping variable and its pairwise comparisons.
+
+**Enrichment counts**  
+This panel shows how many peptide enrichments are detected per sample. It provides a quick overview of the overall signal level and whether some groups tend to have broader or narrower antibody reactivity profiles.
+
+**Alpha diversity**  
+Alpha diversity summarizes the diversity of enriched peptides within each sample.
+
+- **Richness**: the number of distinct enriched features (peptides/species) observed in a sample.
+
+**Beta diversity**  
+Beta diversity summarizes differences between samples based on their peptide reactivity profiles.
+
+- **PCoA** projects between-sample distances into a lower-dimensional space; nearby samples are more similar.
+- **t-SNE** is another low-dimensional visualization that emphasizes local similarity structure.
+- **Distance to centroid / dispersion plot** shows how spread out samples are within each group; larger distances indicate higher within-group heterogeneity.
+
+When shown, **PERMANOVA** tests whether groups differ in overall composition, while the **dispersion test** evaluates whether groups differ in within-group spread.
+
+**Longitudinal stability**  
+When paired longitudinal data are available, this section summarizes how stable each subject’s peptide reactivity profile is across timepoints.
+
+The stability analysis uses the **Kulczynski similarity** metric:
+
+- values closer to **1** indicate more similar/stable profiles between paired timepoints
+- values closer to **0** indicate larger changes over time
+
+The combined heatmap and boxplot help identify whether some groups show more stable or more variable antibody reactivity patterns across longitudinal samples.
+
+**POP framework**  
+The POP framework compares feature prevalence between groups.
+
+At peptide level:  
+- **1** means present/enriched  
+- **0** means absent/not enriched
+
+Prevalence is the proportion of samples in a group with value 1.
+
+For higher ranks such as species, genus, family, or order, a sample is counted as present if at least one peptide assigned to that rank is present in that sample. **For ranks above species, the prevalence comparisons are not as meaningful due to the likelihood of many samples having at least one peptide from that rank, but they are still included for completeness.** 
+
+The POP scatterplots compare prevalence in group 1 vs group 2:  
+- points near the diagonal have similar prevalence  
+- points away from the diagonal differ between groups
+
+**DELTA framework**  
+The DELTA framework highlights features with the strongest shifts between groups.
+
+- **Forest plot**: ranked summary of features with strongest standardized differences
+- **Delta plot**: peptide-level shift pattern for one selected feature
+- **ECDF plot**: cumulative distribution of peptide prevalence values across the two groups
+- **Scatter plot**: prevalence of the feature across all samples, colored by significance
+
+<span style="color:#A61C1C;"><strong>POP provides an intuitive prevalence comparison, while DELTA highlights directional and standardized differences.</strong></span>
+
+```{r, results='asis'}
+for (cmp in comparisons) {
+  cmp_dir <- fs::path(group_dir, cmp)
+  pairwise <- cmp != "all"
+
+  emit_heading(cmp, level = 2)
+
+  if (!fs::dir_exists(cmp_dir)) {
+    emit_missing(glue("_Comparison folder not found: {cmp_dir}_"))
+    next
+  }
+
+  alpha_dir <- fs::path(cmp_dir, "alpha_diversity")
+  beta_dir  <- fs::path(cmp_dir, "beta_diversity")
+  stability_dir <- fs::path(cmp_dir, "similarity")
+  pop_dir   <- fs::path(cmp_dir, "POP_framework")
+  delta_dir <- fs::path(cmp_dir, "DELTA_framework")
+
+  emit_heading("Overview", level = 3)
+  emit_img(file_or_na(cmp_dir, "enrichment_counts.svg"), caption = "Enrichment counts")
+
+  # Alpha diversity section
+  emit_heading("Alpha diversity", level = 3)
+  alpha_files <- c(
+    file_or_na(alpha_dir, "plot.svg"),
+    file_or_na(alpha_dir, "plot_species.svg")
+  )
+  alpha_labels <- c("Peptides alpha diversity plot", "Species alpha diversity plot")
+  #alpha_labels <- c("Peptides alpha diversity plot")
+  #emit_img_grid(alpha_files[!is.na(alpha_files)], alpha_labels[!is.na(alpha_files)], ncol = 1)
+  emit_img_grid(alpha_files[!is.na(alpha_files)], alpha_labels[!is.na(alpha_files)], ncol = 2)
+
+  if (isTRUE(params$include_alpha_tables)) {
+    emit_dt_details(
+      file_or_na(alpha_dir, "table.xlsx"),
+      "Alpha diversity table",
+      top_n = params$top_n
+    )
+    emit_dt_details(
+      file_or_na(alpha_dir, "table_species.xlsx"),
+      "Alpha diversity species table",
+      top_n = params$top_n
+    )
+  }
+
+  # Beta diversity section
+  emit_heading("Beta diversity", level = 3)
+  beta_static <- c(
+    file_or_na(beta_dir, "tsne2d_plot.svg"),
+    file_or_na(beta_dir, "pcoa_plot.svg"),
+    file_or_na(beta_dir, "dispersion_plot.svg"),
+    file_or_na(beta_dir, "scree_plot.svg"),
+    file_or_na(beta_dir, "capscale_plot.svg")
+  )
+  beta_labels <- c(
+    "t-SNE 2D",
+    "PCoA",
+    "Dispersion plot",
+    "Scree plot",
+    "CAPSCALE"
+  )
+  emit_img_grid(beta_static[!is.na(beta_static)], beta_labels[!is.na(beta_static)], ncol = 2)
+
+  tsne3d_html <- file_or_na(beta_dir, "tsne3d_plot.html")
+  if (isTRUE(params$include_tsne3d) && !is.na(tsne3d_html)) {
+    cat_md('<details open><summary><strong>Interactive t-SNE 3D</strong></summary>\n\n')
+    emit_iframe(tsne3d_html, height = "720px")
+    cat_md('</details>\n\n')
+  }
+
+  if (isTRUE(params$include_beta_tables)) {
+    emit_dt_details(
+      file_or_na(beta_dir, "permanova_results.rds"),
+      "PERMANOVA results",
+      top_n = params$top_n
+    )
+    emit_dt_details(
+      file_or_na(beta_dir, "dispersion_results.rds"),
+      "Dispersion results",
+      top_n = params$top_n
+    )
+  }
+
+  #stability, POP and DELTA frameworks are only relevant for pairwise comparisons, so we check for the existence of their directories before emitting those sections
+  
+  # stability section
+  stability_plot <- file_or_na(stability_dir, "kulczynski_combined.svg")
+  if (isTRUE(params$include_longitudinal_stability) && 
+  pairwise && 
+  fs::dir_exists(stability_dir) && 
+  !is.na(stability_plot)) {
+    emit_heading("Stability", level = 3)
+    
+    emit_text(
+      "This section summarizes within-subject longitudinal stability using the Kulczynski similarity metric. Higher similarity indicates more stable peptide reactivity profiles between paired timepoints."
+      )
+      
+    emit_img(
+      stability_plot,
+      caption = "Longitudinal stability: Kulczynski similarity heatmap and boxplot",
+      width = "100%"
+      )
+
+  }
+
+  # POP framework section
+  if (pairwise && fs::dir_exists(pop_dir)) {
+    emit_heading("POP framework", level = 3)
+
+    if (isTRUE(params$include_pop_tables)) {
+      emit_dt_details(
+        file_or_na(pop_dir, "taxa_ranks.csv"),
+        "POP taxa ranks (sorted by p_raw)",
+        top_n = params$top_n
+      )
+      
+      emit_dt_details(
+        file_or_na(pop_dir, "single_peptide.csv"),
+        "POP single peptide table (sorted by p_raw)",
+        top_n = params$top_n
+      )
+    }
+
+    plots_dir <- fs::path(pop_dir, "plots")
+    if (fs::dir_exists(plots_dir) &&
+        (isTRUE(params$include_pop_plots) || pop_interactive_mode != "none")) {
+    emit_pop_scatter_tabs(
+        plots_dir = plots_dir,
+        interactive_mode = pop_interactive_mode,
+        iframe_height = "720px"
+    )
+    }
+  }
+
+
+  # DELTA section
+  if (pairwise && fs::dir_exists(delta_dir)) {
+    emit_heading("DELTA framework", level = 3)
+    emit_delta_forest_tabs(
+      delta_dir = delta_dir,
+      interactive_mode = delta_interactive_mode,
+      iframe_height = "720px",
+      include_feature_plots = isTRUE(params$include_delta_feature_plots),
+      max_feature_plots = params$max_delta_feature_plots
+    )
+
+    if (isTRUE(params$include_delta_tables)) {
+      emit_dt_details(
+        file_or_na(delta_dir, "delta_table_m_eff_gt5.csv"),
+        "DELTA table (p_perm <= 0.05; m_eff > 5; sorted by absolute T_obs_stand and p_perm)",
+        top_n = 100,
+        filter_fun = function(df) {
+          if ("p_perm" %in% names(df)) {
+            df <- df |>
+              dplyr::filter(!is.na(.data$p_perm), .data$p_perm <= 0.05)
+          }
+          df
+        }
+      )
+    }
+  }
+}
+```

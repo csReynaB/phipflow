@@ -1,0 +1,33 @@
+# Nextflow runtime files
+work/
+.nextflow/
+.nextflow.log*
+.nextflow.cache/
+
+# Logs
+logs/
+*.log
+*.out
+*.err
+
+# Large container files
+containers/*.sif
+containers/*.simg
+containers/*.img
+containers/*.tar
+
+# Temporary files
+.tmp/
+tmp/
+.DS_Store
+*.swp
+*.swo
+
+# R session/user files
+.Rhistory
+.RData
+.Rproj.user/
+
+# Quarto generated files
+*_files/
+*.html
