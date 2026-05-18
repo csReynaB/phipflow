@@ -136,7 +136,8 @@ Example:
 
     def workflow_src_dir  = "${projectDir}/src/R"
     def workflow_template = "${projectDir}/src/template/phiper_summary_report.qmd"
-
+    def peptide_library = params.peptide_library ?: "${projectDir}/peplib/peptide_library.rds"
+    
     /*
      * Project-specific paths.
      * These remain inside params.base_dir/project_name.
@@ -147,12 +148,17 @@ Example:
     def data_dir_path      = file("${params.base_dir}/${params.project_name}/Data")
     def metadata_dir_path  = file("${params.base_dir}/${params.project_name}/Metadata")
     def project_r_dir_path = file("${params.base_dir}/${params.project_name}/R")
-
+    
     def metadata_path      = file("${params.base_dir}/${params.project_name}/Metadata/${params.metadata_file}")
     def exist_path         = file("${params.base_dir}/${params.project_name}/Data/${params.exist_file}")
     def fold_path          = file("${params.base_dir}/${params.project_name}/Data/${params.fold_file}")
     def group_config_path  = file("${params.base_dir}/${params.project_name}/R/group_config.R")
 
+    /*
+     * Optional peptide library path, defaulting to phipflow/peplib/peptide_library.rds
+     */
+    def peptide_library_path = file(peptide_library)
+    
     /*
      * Reusable R scripts and QMD template live in phipflow/src.
      */
@@ -177,6 +183,7 @@ Example:
         'Exist matrix'               : exist_path,
         'Fold matrix'                : fold_path,
         'group_config.R'             : group_config_path,
+        'Peptide library RDS'        : peptide_library_path,
         '01-create_phiper_object.R'  : r_create_path,
         '02-run_phiper_analysis.R'   : r_analysis_path,
         '03-render_phiper_reports.R' : r_render_path,
@@ -223,6 +230,7 @@ Example:
     log.info "  parquet_name        : ${parquet_name}"
     log.info "  group_cols          : ${group_cols.join(', ')}"
     log.info "  report_group_cols   : ${report_group_cols.join(', ')}"
+    log.info "  peptide_library     : ${peptide_library}"
     log.info "  report BASE_DIR     : ${params.base_dir}/${params.project_name}/results"
     log.info "  use_modules         : ${params.use_modules}"
     log.info "  container           : ${params.container ?: 'none'}"
@@ -262,6 +270,7 @@ Example:
         params.manual_comparison_file,
         params.force,
         workflow_src_dir,
+        peptide_library,
         params.use_modules
     )
 

@@ -125,7 +125,7 @@ MANUAL_COMPARISON_FILE <- parse_nullable(
 )
 
 PHIPFLOW_SRC <- get_kv_arg("PHIPFLOW_SRC", required = TRUE)
-
+PEPTIDE_LIBRARY <- get_kv_arg("PEPTIDE_LIBRARY", required = TRUE)
 # ------------------------------------------------------------------------------
 # Define main directory paths and load group configuration/helper functions
 # ------------------------------------------------------------------------------
@@ -145,6 +145,7 @@ if (!is.null(MANUAL_COMPARISON_FILE) && nzchar(MANUAL_COMPARISON_FILE)) {
 }
 
 helper_file <- file.path(PHIPFLOW_SRC, "helper_functions.R")
+peptide_library_path <- normalizePath(PEPTIDE_LIBRARY, mustWork = FALSE)
 
 message("PROJECT_DIR: ", project_dir)
 message("ACTIVE_GROUP: ", ACTIVE_GROUP)
@@ -153,7 +154,7 @@ message("data_long_path: ", data_long_path)
 message("results_dir: ", results_dir)
 message("group_config_file: ", group_config_file)
 message("PHIPFLOW_SRC: ", PHIPFLOW_SRC)
-
+message("PEPTIDE_LIBRARY: ", peptide_library_path)
 message("helper_file: ", helper_file)
 message("N_CORES: ", N_CORES)
 message("IO_CORES: ", IO_CORES)
@@ -222,25 +223,17 @@ withr::with_preserve_seed({
 })
 
 # ------------------------------------------------------------------------------
-# Results directory + peptide library snapshot
+# Results directory + peptide library
 # ------------------------------------------------------------------------------
-# create a base results folder and persist the peptide library used in this run
-# for provenance and reproducibility
+# The peptide library is now a workflow-level resource stored in:
+#   phipflow/peplib/peptide_library.rds
+#
+# It is required and is not created by this analysis script.
+# ------------------------------------------------------------------------------
 dir.create(results_dir, recursive = TRUE, showWarnings = FALSE)
 
-peptide_library_path <- file.path(results_dir, "peptide_library.rds")
-if (!file.exists(peptide_library_path)) {
-  message("Creating peptide library RDS: ", peptide_library_path)
-  
-  peptide_library <- ps %>%
-    get_peptide_library() %>%
-    collect() %>%
-    as.data.frame()
-  
-  saveRDS(peptide_library, file = peptide_library_path)
-} else {
-  message("Using existing peptide library RDS: ", peptide_library_path)
-}
+message("Using workflow peptide library RDS: ", peptide_library_path)
+peplib <- as.data.frame(readRDS(peptide_library_path))
 
 # ------------------------------------------------------------------------------
 # Analysis setup
@@ -1685,9 +1678,7 @@ for (cmp_idx in seq_along(comparisons)) {
   data_frameworks <- readRDS(file.path(out_dir, paste0(label_dir, "_data.rds")))
   if(is.null(paired_col)){
     data_frameworks$group_char <- factor(data_frameworks$group_char, levels = rev(cmp))
-  }
-  peplib <- readRDS(file.path(results_dir, "peptide_library.rds"))
-  
+  }  
   
   dir.create(file.path(out_dir, "POP_framework"), recursive = TRUE,
              showWarnings = FALSE)

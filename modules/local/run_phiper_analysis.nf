@@ -13,8 +13,9 @@ process RUN_PHIPER_ANALYSIS {
     val manual_comparison_file
     val force
     val workflow_src_dir
+    val peptide_library
     val use_modules
-
+  
     output:
     path "run_phiper_analysis.${project_name}.${group_col}.done", emit: analysis_marker
 
@@ -48,6 +49,7 @@ process RUN_PHIPER_ANALYSIS {
     echo "Project                : ${project_name}"
     echo "Group column           : ${group_col}"
     echo "Parquet                : ${parquet_name}"
+    echo "Peptide library        : ${peptide_library}"
     echo "ALL                    : ${all_flag}"
     echo "DEFAULT_LONGITUDINAL   : ${default_longitudinal}"
     echo "MANUAL_COMPARISON_FILE : ${manual_comparison_file}"
@@ -67,7 +69,8 @@ process RUN_PHIPER_ANALYSIS {
       PROJECT_DIR="${project_name}" \\
       PARQUET_NAME="${parquet_name}" \\
       MANUAL_COMPARISON_FILE="${manual_comparison_file}" \\
-      PHIPFLOW_SRC="${workflow_src_dir}"
+      PHIPFLOW_SRC="${workflow_src_dir}" \\
+      PEPTIDE_LIBRARY="${peptide_library}"
 
     test -d "${project_name}/results/${group_col}"
 
