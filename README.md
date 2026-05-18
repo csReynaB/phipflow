@@ -1,6 +1,6 @@
 # phipflow
 
-`phipflow` is a Nextflow DSL2 wrapper for running the PHIPER analysis workflow on LiSC.
+`phipflow` is a Nextflow DSL2 wrapper for running the PHIPER analysis workflow on a server.
 
 It automates the full PHIPER workflow:
 
@@ -124,6 +124,164 @@ For example:
 ```
 
 The file `<project_name>/R/group_config.R` defines the PHIPER group configurations used by the analysis.
+
+---
+
+## Input data format
+
+`phipflow` expects PHIPER input matrices and metadata in a consistent format.
+
+### `exist.csv`
+
+`exist.csv` should be a **wide peptide-by-sample matrix**:
+
+```text
+peptide_name,sample_1,sample_2,sample_3,...
+pep_0001,0,1,0,...
+pep_0002,1,1,0,...
+pep_0003,0,0,1,...
+```
+
+Rows are peptides/features. Columns are samples.
+
+By default, the peptide identifier column is expected to be:
+
+```text
+peptide_name
+```
+
+This can be changed with:
+
+```bash
+--peptide_col your_peptide_column
+```
+
+The sample columns are detected from the first column name starting with the configured sample prefix. By default:
+
+```bash
+--sample_prefix R
+```
+
+### `fold.csv`
+
+`fold.csv` should have the same wide structure as `exist.csv`:
+
+```text
+peptide_name,sample_1,sample_2,sample_3,...
+pep_0001,0,2.3,0,...
+pep_0002,1.8,4.1,0,...
+pep_0003,0,0,3.5,...
+```
+
+It must contain the same peptide identifier column and matching sample columns.
+
+`exist.csv` is used as the binary enrichment matrix, where:
+
+```text
+1 = enriched / present
+0 = not enriched / absent
+```
+
+`fold.csv` provides the corresponding fold-change values. Infinite values can be replaced by the maximum finite fold-change value using:
+
+```bash
+--replace_inf TRUE
+```
+
+This is the default behavior.
+
+### Metadata file
+
+The metadata file should be in **long/sample-level format**:
+
+```text
+SampleName,Sex,Age,group_test,group_IBD,subject_id,Smoker,Timepoint,Smoker_Timepoint
+R001,F,34,Control,Control,S01,Smoker,BL,Smoker_BL
+R002,F,34,Disease,IBD,S01,Smoker,FU,Smoker_FU
+R003,M,41,Control,Control,S02,NonSmoker,BL,NonSmoker_BL
+```
+
+The first column is assumed to contain the sample name / sample ID. During object creation, the first metadata column is renamed internally to:
+
+```text
+sample_id
+```
+
+The sample IDs in the metadata must match the sample column names in `exist.csv` and `fold.csv`.
+
+### Longitudinal data
+
+For longitudinal or paired analyses, the metadata should include a subject-level identifier column named exactly:
+
+```text
+subject_id
+```
+
+This column is used to match repeated samples from the same individual.
+
+For now, longitudinal group columns should be created by concatenating the biological group column and the timepoint column:
+
+```text
+<group_col>_<timepoint_col>
+```
+
+For example, if the metadata has:
+
+```text
+Smoker
+Timepoint
+```
+
+where `Timepoint` contains values such as:
+
+```text
+BL, M3, FU
+```
+
+then the longitudinal analysis column should be named:
+
+```text
+Smoker_Timepoint
+```
+
+and should contain combined labels such as:
+
+```text
+Smoker_BL
+Smoker_M3
+Smoker_FU
+NonSmoker_BL
+NonSmoker_FU
+```
+
+This combined column is the value that should be used in `group_config.R` and passed to `--group_cols` when running a longitudinal timepoint analysis.
+
+Example:
+
+```bash
+nextflow run main.nf \
+  -profile lisc,apptainer \
+  --project_name IBD-Berlin \
+  --metadata_file IBD-Berlin_metadata.csv \
+  --group_cols Smoker_Timepoint \ # this can be named different than the group_col "Smoker_Timepoint" in metadata but for consistency it's better to name it the same
+  -resume
+```
+
+In `group_config.R`, the same name should be present in `group_definitions`, for example:
+
+```r
+group_definitions <- list(
+  Smoker_Timepoint = list(
+    group_col = "Smoker_Timepoint",
+    groups = c("Smoker_BL", "Smoker_FU", "NonSmoker_BL", "NonSmoker_FU"),
+    comparisons = list(
+      c("Smoker_BL", "Smoker_FU"),
+      c("NonSmoker_BL", "NonSmoker_FU")
+    ),
+    longitudinal = c(TRUE, TRUE)
+  )
+)
+```
 
 ---
 
