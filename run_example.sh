@@ -3,7 +3,6 @@ set -euo pipefail
 
 module purge
 module load Nextflow
-module load Apptainer
 
 nextflow run main.nf \
   -profile lisc,apptainer \
