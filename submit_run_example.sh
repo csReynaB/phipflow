@@ -11,8 +11,13 @@ set -euo pipefail
 config=$1
 run_name=$2
 
-phipflow_dir="/lisc/data/scratch/ccr/CR_projects/phiper/phipflow"
+phipflow_dir="/lisc/data/scratch/ccr/CR_projects/phipflow"
 run_dir="${phipflow_dir}/runs/${run_name}"
+
+# If config is relative, make it relative to phipflow_dir
+if [[ "$config" != /* ]]; then
+  config="${phipflow_dir}/${config}"
+fi
 
 mkdir -p "${run_dir}/logs"
 cd "${run_dir}"
