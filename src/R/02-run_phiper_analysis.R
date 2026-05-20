@@ -1412,42 +1412,53 @@ for (cmp_idx in seq_along(comparisons)) {
       ) %>%
       collect()
     
-    # Detect the two compared groups/timepoints
+    # Map the two comparison labels to the original group/timepoint components,
+    # but preserve the explicit comparison order: var1 first, var2 second.
     comparison_levels <- df_long %>%
-      distinct(Group_tmp, Timepoint_tmp) %>%
-      arrange(Timepoint_tmp, Group_tmp) %>%
-      mutate(comp_label = paste0(Group_tmp, " at ", Timepoint_tmp))
-    if (nrow(comparison_levels) != 2) {
+      dplyr::distinct(group_char, Group_tmp, Timepoint_tmp) %>%
+      dplyr::mutate(
+        comp_label = paste0(Group_tmp, " at ", Timepoint_tmp)
+      )
+    comparison_levels <- tibble::tibble(group_char = c(var1, var2)) %>%
+      dplyr::left_join(comparison_levels, by = "group_char") 
+    
+    if (nrow(comparison_levels) != 2 || any(is.na(comparison_levels$comp_label))) {
       stop(
-        "Expected exactly two group/timepoint combinations, but found: ",
-        paste(comparison_levels$comp_label, collapse = ", ")
+        "Expected exactly two mapped group/timepoint combinations for: ",
+        var1, " vs ", var2,
+        ". Got: ",
+        paste(comparison_levels$group_char, comparison_levels$comp_label, sep = " = ", collapse = "; "),
+        call. = FALSE
       )
     }
-    x_group <- comparison_levels$Group_tmp[1]
-    x_time  <- comparison_levels$Timepoint_tmp[1]
+
+    # x-axis is always var1; y-axis is always var2
     x_title_raw <- comparison_levels$comp_label[1]
-    
-    y_group <- comparison_levels$Group_tmp[2]
-    y_time  <- comparison_levels$Timepoint_tmp[2]
     y_title_raw <- comparison_levels$comp_label[2]
+    
     # Sample annotation and ordering
     ann_df <- df_long %>%
-      distinct(subject_id, sample_id, Group_tmp, Timepoint_tmp) %>%
+      distinct(subject_id, sample_id, group_char, Group_tmp, Timepoint_tmp) %>%
       mutate(
         comp_label = paste0(Group_tmp, " at ", Timepoint_tmp)
       ) %>% 
       as.data.frame()
+
     x_samples_df <- ann_df %>%
-      filter(Group_tmp == x_group, Timepoint_tmp == x_time) %>%
+      dplyr::filter(group_char == var1) %>%
       arrange(subject_id)
+
     y_samples_df <- ann_df %>%
-      filter(Group_tmp == y_group, Timepoint_tmp == y_time) %>%
+      dplyr::filter(group_char == var2) %>%
       arrange(subject_id)
     
     if (!identical(x_samples_df$subject_id, y_samples_df$subject_id)) {
-      stop("Subject IDs are not in the same order between the two paired groups.")
+        stop("Subject IDs are not in the same order between the two paired groups: ", 
+        var1, " vs ", var2, call. = FALSE)
     }
+
     all_sample_order <- c(x_samples_df$sample_id, y_samples_df$sample_id)
+
     x_title <- paste0(x_title_raw, " (n = ", nrow(x_samples_df), ")")
     y_title <- paste0(y_title_raw, " (n = ", nrow(y_samples_df), ")")
     
@@ -1476,8 +1487,7 @@ for (cmp_idx in seq_along(comparisons)) {
     )
     kulczynski_sim <- 1 - as.matrix(kulczynski_dist)
     kulczynski_sim <- kulczynski_sim[y_samples_df$sample_id, x_samples_df$sample_id, drop = FALSE]
-    
-    
+
     
     plot_df <- as.data.frame(as.table(kulczynski_sim)) %>%
       rename(
@@ -1503,45 +1513,7 @@ for (cmp_idx in seq_along(comparisons)) {
         )
       )
     saveRDS(plot_df, file.path(out_dir, "similarity", "similarity_results.rds"))
-    # Full similarity heatmap
-    # p <- ggplot(plot_df, aes(x = x_subject, y = y_subject, fill = similarity)) +
-    #   geom_tile(color = "grey85", linewidth = 0.15) +
-    #   coord_fixed() +
-    #   scale_fill_viridis_c(
-    #     name = "Kulczynski similarity coefficient",
-    #     limits = c(0, 1),
-    #     guide = guide_colorbar(
-    #       title.position = "right",
-    #       title.vjust = 0.5,
-    #       barheight = grid::unit(35, "mm"),
-    #       barwidth  = grid::unit(5, "mm")
-    #     ),
-    #     option = "B",
-    #     direction = -1
-    #   ) +
-    #   labs(
-    #     x = x_title,
-    #     y = y_title
-    #   ) +
-    #   theme_minimal(base_size = 13) +
-    #   theme(
-    #     axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
-    #     axis.text.y = element_text(size = 9),
-    #     axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
-    #     axis.title.y = element_text(face = "bold", margin = margin(r = 10)),
-    #     panel.grid = element_blank(),
-    #     
-    #     legend.position = "right",
-    #     legend.title = element_text(
-    #       face = "bold",
-    #       angle = 90,
-    #       hjust = 0.5,
-    #       vjust = 0.5
-    #     ),
-    #     legend.text = element_text(size = 10),
-    #     plot.margin = margin(2, 2, 2, 2)
-    #   )
-    # p
+
     comp_palette_df <- ann_df %>%
       distinct(comp_label, Group_tmp, Timepoint_tmp) %>%
       mutate(group_key = paste(Group_tmp, Timepoint_tmp, sep = "_"),
@@ -1676,9 +1648,21 @@ for (cmp_idx in seq_along(comparisons)) {
   # POP framework
   # ----------------------------------------------------------------------------
   data_frameworks <- readRDS(file.path(out_dir, paste0(label_dir, "_data.rds")))
-  if(is.null(paired_col)){
-    data_frameworks$group_char <- factor(data_frameworks$group_char, levels = rev(cmp))
-  }  
+
+  # For non-longitudinal comparisons, force the POP order:
+  #   group1 / x-axis = var1
+  #   group2 / y-axis = var2
+  #
+  # For paired longitudinal comparisons, do not force factor levels because
+  # compute_pop paired mode currently has issues with factor ordering.
+  if (is.null(paired_col)) {
+    data_frameworks$group_char <- factor(
+      as.character(data_frameworks$group_char),
+      levels = c(var1, var2)
+    )
+  } else {
+    data_frameworks$group_char <- as.character(data_frameworks$group_char)
+  } 
   
   dir.create(file.path(out_dir, "POP_framework"), recursive = TRUE,
              showWarnings = FALSE)
@@ -1693,6 +1677,16 @@ for (cmp_idx in seq_along(comparisons)) {
     peptide_library   = peplib  
   )
   pep_tbl <- extract_tbl(prev_res_pep)
+  # Define the POP plotting order.
+  # Non-longitudinal: this should be var1/var2 because we forced factor levels.
+  # Paired longitudinal: use what compute_pop returned.
+  pop_group1 <- as.character(pep_tbl$group1[1])
+  pop_group2 <- as.character(pep_tbl$group2[1])
+
+  message("POP plotting order:")
+  message("  x / group1 = ", pop_group1)
+  message("  y / group2 = ", pop_group2)
+
   write.csv(pep_tbl, file.path(out_dir, "POP_framework", "single_peptide.csv"))
   
   ranks_tax <- c("phylum", "class", "order", "family", "genus", "species")
@@ -1725,8 +1719,8 @@ for (cmp_idx in seq_along(comparisons)) {
     p_static <- scatter_static(
       df   = df_rank_static,
       rank = rank_chr,
-      xlab = group_n[df_rank$group1[1]],
-      ylab = group_n[df_rank$group2[1]],
+      xlab = group_n[pop_group1],
+      ylab = group_n[pop_group2],
       point_size       = 2,
       jitter_width_pp  = 0.15,
       jitter_height_pp = 0.15,
@@ -1756,8 +1750,8 @@ for (cmp_idx in seq_along(comparisons)) {
     p_inter <- scatter_interactive(
       df   = df_rank,
       rank = rank_chr,
-      xlab = group_n[df_rank$group1[1]],
-      ylab = group_n[df_rank$group2[1]],
+      xlab = group_n[pop_group1],
+      ylab = group_n[pop_group2],
       peplib = peplib,
       point_size = 10,
       jitter_width_pp  = 0.25,
@@ -1801,9 +1795,7 @@ for (cmp_idx in seq_along(comparisons)) {
     paired_by <- NULL
     data_frameworks$subject_id <- data_frameworks$sample_id
   }
-  
-  #data_frameworks <- readRDS("/home/creyna/Vogl-lab_Projects_git/BC-Engl/Data/allBC/noSARs/results/VitalStatus_stratified_Timepoint/Alive_BL_vs._Alive_FU/Dead_BL_vs._Alive_BL_data.rds")
-  
+    
   res <- phiper::compute_delta(
     x                  = data_frameworks,
     exist_col          = "exist",
@@ -1824,6 +1816,27 @@ for (cmp_idx in seq_along(comparisons)) {
     paired_by          = paired_by
   )
   res <- as.data.frame(res)
+
+  if (!is.null(paired_col)) {
+    if ("T_obs_stand" %in% names(res)) {
+      res$T_obs_stand <- -res$T_obs_stand
+      message("Paired longitudinal DELTA: flipped sign of T_obs_stand.")
+    } else {
+      message("Paired longitudinal DELTA: T_obs_stand not found; sign was not flipped.")
+    }
+  }
+
+  if (!all(c("group1", "group2") %in% names(res))) {
+    stop("DELTA result does not contain group1/group2 columns.", call. = FALSE)
+  }
+
+  delta_group1 <- as.character(res$group1[1])
+  delta_group2 <- as.character(res$group2[1])
+
+  message("DELTA plotting order:")
+  message("  group1 / forest left label  = ", delta_group1)
+  message("  group2 / forest right label = ", delta_group2)
+
   write.csv(res, file = file.path(out_dir, "DELTA_framework",
                                   "delta_table.csv"))
   
@@ -1835,57 +1848,6 @@ for (cmp_idx in seq_along(comparisons)) {
   
   tax_ranks <- c("domain", "kingdom", "phylum", "class", "order", "family",
                  "genus", "species")
-  # for (taxon in c("order", "family", "genus", "species", "all")){
-  #   if(taxon %in% "all"){
-  #       std_idx <- res$rank %in% tax_ranks
-  #       res$feature[!std_idx] <- as.character(res$rank[!std_idx])
-  #       res$rank <- taxon
-  #   }
-  
-  #   svglite::svglite(
-  #     file.path(out_dir, "DELTA_framework",
-  #               paste0("significant_static_", taxon, "_forestplot.svg")),
-  #     width = 20/2.54,
-  #     height = 20/2.54,
-  #     bg = "white"
-  #   )
-  
-  #   message("Creating forest plot for taxon: ", taxon, ", group1 = ", df_rank$group1[1], ", group2 = ", df_rank$group2[1])
-  
-  #   p_forest_unc <- phiper::forestplot(
-  #     results_tbl          = res,
-  #     rank_of_interest     = taxon,
-  #     use_diverging_colors = TRUE,
-  #     filter_significant   = "p_perm",
-  #     left_label           = paste0("More in ", as.character(df_rank$group1[1])),#df_rank$group1[1]),
-  #     right_label          = paste0("More in ", as.character(df_rank$group2[1])),#df_rank$group2[1]),
-  #     label_vjust           = -0.9,
-  #     y_pad                 = 0.3,
-  #     label_x_gap_frac      = -0.3,
-  #     statistic_to_plot     = "T_stand"
-  #   )
-  #   print(p_forest_unc)
-  #   dev.off()
-  
-  #   p_inter <- phiper::forestplot_interactive(
-  #     results_tbl            = res,
-  #     rank_of_interest       = taxon,
-  #     statistic_to_plot      = "T_stand",
-  #     use_diverging_colors   = TRUE,
-  #     filter_significant     = "p_perm",
-  #     left_label           = paste0("More in ", as.character(df_rank$group1[1])),#df_rank$group1[1]),
-  #     right_label          = paste0("More in ", as.character(df_rank$group2[1])),#df_rank$group2[1]),
-  #     arrow_length_frac      = 0.35,
-  #     label_x_gap_frac       = -0.3,
-  #     label_y_offset        = -0.9
-  #   )$plot
-  #   htmlwidgets::saveWidget(
-  #     p_inter,
-  #     file = file.path(out_dir, "DELTA_framework",
-  #                     paste0("significant_interactive_", taxon, "_forestplot.html")),
-  #     selfcontained = TRUE
-  #   )
-  # }
   
   for (taxon in c("order", "family", "genus", "species", "all")){
     if(taxon %in% "all"){
@@ -1902,20 +1864,21 @@ for (cmp_idx in seq_along(comparisons)) {
       bg = "white"
     )
     
-    message("Creating forest plot for taxon: ", taxon, ", group1 = ", df_rank$group1[1], ", group2 = ", df_rank$group2[1])
-    
+    message("Creating forest plot for taxon: ", taxon, ", group1 = ", delta_group1, ", group2 = ", delta_group2)
+   
     p_forest_unc <- phiper::forestplot(
       results_tbl          = res_plot,
       rank_of_interest     = taxon,
       use_diverging_colors = TRUE,
       filter_significant   = "p_perm",
-      left_label           = paste0("More in ", as.character(df_rank$group1[1])),#df_rank$group1[1]),
-      right_label          = paste0("More in ", as.character(df_rank$group2[1])),#df_rank$group2[1]),
+      left_label           = paste0("More in ", delta_group1),
+      right_label          = paste0("More in ", delta_group2),
       label_vjust           = -0.9,
       y_pad                 = 0.3,
       label_x_gap_frac      = -0.3,
       statistic_to_plot     = "T_stand"
     )
+    p_forest_unc <- p_forest_unc$plot + labs(subtitle = NULL)
     print(p_forest_unc)
     dev.off()
     
@@ -1925,12 +1888,16 @@ for (cmp_idx in seq_along(comparisons)) {
       statistic_to_plot      = "T_stand",
       use_diverging_colors   = TRUE,
       filter_significant     = "p_perm",
-      left_label           = paste0("More in ", as.character(df_rank$group1[1])),#df_rank$group1[1]),
-      right_label          = paste0("More in ", as.character(df_rank$group2[1])),#df_rank$group2[1]),
+      left_label           = paste0("More in ", delta_group1),
+      right_label          = paste0("More in ", delta_group2),
       arrow_length_frac      = 0.35,
       label_x_gap_frac       = -0.3,
       label_y_offset        = -0.9
     )$plot
+
+    p_inter <- p_inter %>% 
+      plotly::layout(title = list(text = NULL))
+    
     htmlwidgets::saveWidget(
       p_inter,
       file = file.path(out_dir, "DELTA_framework",
@@ -2039,8 +2006,8 @@ for (cmp_idx in seq_along(comparisons)) {
     
     p_scatter <- scatter_static(
       df   = feature_data_static,
-      xlab = group1,
-      ylab = group2,
+      xlab = as.character(group1),
+      ylab = as.character(group2),
       point_size       = 2,
       point_alpha      = 0.85,
       jitter_width_pp  = 0.15,
@@ -2087,8 +2054,8 @@ for (cmp_idx in seq_along(comparisons)) {
     
     p_inter <- scatter_interactive(
       df = feature_data,
-      xlab = group1,
-      ylab = group2,
+      xlab = as.character(group1),
+      ylab = as.character(group2),
       peplib = peplib,
       show_background   = TRUE,
       background_df     = bg_df,
@@ -2292,8 +2259,8 @@ for (cmp_idx in seq_along(comparisons)) {
   n_features <- nrow(res_with_pep)
   for (i in seq_len(n_features)) {
     feature_name <- res_with_pep$feature[i]
-    group1       <- res_with_pep$pep_tbl_subset[[i]]$group1[1]
-    group2       <- res_with_pep$pep_tbl_subset[[i]]$group2[1]
+    group1       <- as.character(res_with_pep$pep_tbl_subset[[i]]$group1[1])
+    group2       <- as.character(res_with_pep$pep_tbl_subset[[i]]$group2[1])
     feature_data <- res_with_pep$pep_tbl_subset[[i]]
     message("Plotting [", i, "/", n_features, "]: ", feature_name)
     plot_feature_all(feature_name, group1, group2, feature_data, out_dir)
