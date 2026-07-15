@@ -10,6 +10,7 @@ process RENDER_PHIPER_REPORTS {
     val group_cols
     val workflow_src_dir
     val workflow_template
+    val results_name
     val use_modules
 
     output:
@@ -20,6 +21,7 @@ process RENDER_PHIPER_REPORTS {
     set -euo pipefail
 
     workdir=\$PWD
+    results_dir="${base_dir}/${project_name}/${results_name}"
 
     if [[ "${use_modules}" == "true" ]]; then
       module purge
@@ -38,22 +40,22 @@ process RENDER_PHIPER_REPORTS {
     cd "${base_dir}"
 
     echo "Rendering PHIPER reports"
-    echo "Base dir      : ${base_dir}/${project_name}/results"
+    echo "Results dir   : \${results_dir}"
     echo "Group cols    : ${group_cols}"
     echo "Workflow src  : ${workflow_src_dir}"
     echo "Template      : ${workflow_template}"
     echo "Use modules   : ${use_modules}"
 
     Rscript --vanilla "${workflow_src_dir}/03-render_phiper_reports.R" \\
-      BASE_DIR="${base_dir}/${project_name}/results" \\
+      BASE_DIR="\${results_dir}" \\
       GROUP_COLS="${group_cols}" \\
       PHIPFLOW_SRC="${workflow_src_dir}" \\
       TEMPLATE="${workflow_template}"
 
     for gc in \$(echo "${group_cols}" | tr ',' ' '); do
-      test -s "${project_name}/results/\${gc}/summary_report_\${gc}.html"
+      test -s "${project_name}/${results_name}/\${gc}/summary_report_\${gc}.html"
     done
 
-    echo "${base_dir}/${project_name}/results" > "\${workdir}/render_phiper_reports.${project_name}.done"
+    echo "\${results_dir}" > "\${workdir}/render_phiper_reports.${project_name}.done"
     """
 }

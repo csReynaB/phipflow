@@ -211,6 +211,46 @@ Example:
     }
 
     /*
+    * Resolve results directory name.
+    */
+    def results_name = params.results_name?.toString()?.trim() ?: "results"
+
+    if (!results_name || results_name in [".", ".."] || results_name.contains("/")) {
+        error "--results_name must be a simple directory name, not a path. Got: ${results_name}"
+    }
+
+    /*
+    / Resolve rank columns for Delta framework aggregation.
+    */
+    def rank_cols = []
+
+    if (params.rank_cols instanceof List) {
+        rank_cols = params.rank_cols.collect { it.toString().trim() }.findAll { it }
+    } else {
+        rank_cols = parseCsvParam(params.rank_cols)
+    }
+
+        /*
+    * Resolve DELTA aggregate_stat.
+    */
+    def aggregate_stat = params.aggregate_stat?.toString()?.trim() ?: 'af'
+
+    if (!(aggregate_stat in ['af', 'maxmean'])) {
+        error "--aggregate_stat must be one of: af, maxmean. Got: ${aggregate_stat}"
+    }
+
+
+    /*
+    * Resolve DELTA minimum effective peptide count.
+    */
+    def delta_min_m_eff = params.delta_min_m_eff?.toString()?.trim() ?: '5'
+
+    if (!(delta_min_m_eff ==~ /[0-9]+(\.[0-9]+)?/)) {
+        error "--delta_min_m_eff must be a non-negative number. Got: ${delta_min_m_eff}"
+    }
+
+
+    /*
      * Resolve parquet output name.
      */
 
@@ -231,7 +271,11 @@ Example:
     log.info "  group_cols          : ${group_cols.join(', ')}"
     log.info "  report_group_cols   : ${report_group_cols.join(', ')}"
     log.info "  peptide_library     : ${peptide_library}"
+    log.info "  rank_cols          : ${rank_cols.join(', ')}"
+    log.info "  aggregate_stat     : ${aggregate_stat}"
+    log.info "  delta_min_m_eff   : ${delta_min_m_eff}"
     log.info "  report BASE_DIR     : ${params.base_dir}/${params.project_name}/results"
+    log.info "  results_dir         : ${params.base_dir}/${params.project_name}/${results_name}"
     log.info "  use_modules         : ${params.use_modules}"
     log.info "  container           : ${params.container ?: 'none'}"
     /*
@@ -271,6 +315,10 @@ Example:
         params.force,
         workflow_src_dir,
         peptide_library,
+        rank_cols.join(','),
+        aggregate_stat,
+        delta_min_m_eff,
+        results_name,
         params.use_modules
     )
 
@@ -287,6 +335,7 @@ Example:
         report_group_cols.join(','),
         workflow_src_dir,
         workflow_template,
+        results_name,
         params.use_modules
     )
 }

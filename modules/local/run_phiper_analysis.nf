@@ -14,6 +14,10 @@ process RUN_PHIPER_ANALYSIS {
     val force
     val workflow_src_dir
     val peptide_library
+    val rank_cols
+    val aggregate_stat
+    val delta_min_m_eff
+    val results_name
     val use_modules
   
     output:
@@ -24,6 +28,7 @@ process RUN_PHIPER_ANALYSIS {
     set -euo pipefail
 
     workdir=\$PWD
+    results_dir="${base_dir}/${project_name}/${results_name}"
 
     if [[ "${use_modules}" == "true" ]]; then
       module purge
@@ -70,10 +75,15 @@ process RUN_PHIPER_ANALYSIS {
       PARQUET_NAME="${parquet_name}" \\
       MANUAL_COMPARISON_FILE="${manual_comparison_file}" \\
       PHIPFLOW_SRC="${workflow_src_dir}" \\
-      PEPTIDE_LIBRARY="${peptide_library}"
+      PEPTIDE_LIBRARY="${peptide_library}" \\
+      RANK_COLS="${rank_cols}" \\
+      AGGREGATE_STAT="${aggregate_stat}" \\
+      DELTA_MIN_M_EFF="${delta_min_m_eff}" \\
+      RESULTS_NAME="${results_name}"
 
-    test -d "${project_name}/results/${group_col}"
+    echo "Checking result directory: \${results_dir}"
+    test -d "\${results_dir}"
 
-    echo "${base_dir}/${project_name}/results/${group_col}" > "\${workdir}/run_phiper_analysis.${project_name}.${group_col}.done"
+    echo "\${results_dir}" > "\${workdir}/run_phiper_analysis.${project_name}.${group_col}.done"
     """
 }

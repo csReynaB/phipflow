@@ -90,6 +90,16 @@ parse_nullable <- function(x) {
   x
 }
 
+parse_csv <- function(x, default = NULL) {
+  if (is.null(x) || !nzchar(trimws(x))) return(default)
+
+  x <- strsplit(x, ",", fixed = TRUE)[[1]]
+  x <- trimws(x)
+  x <- x[nzchar(x)]
+
+  x
+}
+
 N_CORES <- as.integer(get_kv_arg("N_CORES", default = "1"))
 MAX_GB  <- as.numeric(get_kv_arg("MAX_GB", default = "40"))
 
@@ -119,6 +129,12 @@ LOG_FILE <- parse_nullable(get_kv_arg("LOG_FILE", default = NULL))
 ACTIVE_GROUP <- get_kv_arg("ACTIVE_GROUP", required = TRUE)
 PROJECT_DIR  <- get_kv_arg("PROJECT_DIR", required = TRUE)
 PARQUET_NAME <- get_kv_arg("PARQUET_NAME", default = paste0(PROJECT_DIR, ".parquet"))
+RESULTS_NAME <- get_kv_arg("RESULTS_NAME", default = "results")
+RESULTS_NAME <- trimws(RESULTS_NAME)
+
+if (!nzchar(RESULTS_NAME) || RESULTS_NAME %in% c(".", "..") || grepl("/", RESULTS_NAME)) {
+  stop("RESULTS_NAME must be a simple directory name. Got: ", RESULTS_NAME, call. = FALSE)
+}
 
 MANUAL_COMPARISON_FILE <- parse_nullable(
   get_kv_arg("MANUAL_COMPARISON_FILE", default = NULL)
@@ -126,13 +142,53 @@ MANUAL_COMPARISON_FILE <- parse_nullable(
 
 PHIPFLOW_SRC <- get_kv_arg("PHIPFLOW_SRC", required = TRUE)
 PEPTIDE_LIBRARY <- get_kv_arg("PEPTIDE_LIBRARY", required = TRUE)
+RANK_COLS <- parse_csv(
+  get_kv_arg(
+    "RANK_COLS",
+    default = "class,order,family,genus,species"
+  )
+)
+
+AGGREGATE_STAT <- get_kv_arg("AGGREGATE_STAT", default = "af")
+AGGREGATE_STAT <- trimws(tolower(AGGREGATE_STAT))
+
+allowed_aggregate_stats <- c("af", "maxmean")
+
+if (!AGGREGATE_STAT %in% allowed_aggregate_stats) {
+  stop(
+    "AGGREGATE_STAT must be one of: ",
+    paste(allowed_aggregate_stats, collapse = ", "),
+    ". Got: ",
+    AGGREGATE_STAT,
+    call. = FALSE
+  )
+}
+
+message("AGGREGATE_STAT: ", AGGREGATE_STAT)
+
+# Add the delta minimum value variable
+DELTA_MIN_M_EFF <- as.numeric(
+  get_kv_arg("DELTA_MIN_M_EFF", default = "5")
+)
+
+if (is.na(DELTA_MIN_M_EFF) || DELTA_MIN_M_EFF < 0) {
+  stop(
+    "DELTA_MIN_M_EFF must be a non-negative number. Got: ",
+    DELTA_MIN_M_EFF,
+    call. = FALSE
+  )
+}
+
+message("DELTA_MIN_M_EFF: ", DELTA_MIN_M_EFF)
+
 # ------------------------------------------------------------------------------
 # Define main directory paths and load group configuration/helper functions
 # ------------------------------------------------------------------------------
 
 project_dir <- PROJECT_DIR
 data_dir    <- file.path(project_dir, "Data")
-results_dir <- file.path(project_dir, "results")
+# results_dir <- file.path(project_dir, "results") # Change to variable
+results_dir <- file.path(project_dir, RESULTS_NAME)
 r_dir       <- file.path(project_dir, "R")
 
 group_config_file <- file.path(r_dir, "group_config.R")
@@ -150,6 +206,7 @@ peptide_library_path <- normalizePath(PEPTIDE_LIBRARY, mustWork = FALSE)
 message("PROJECT_DIR: ", project_dir)
 message("ACTIVE_GROUP: ", ACTIVE_GROUP)
 message("PARQUET_NAME: ", PARQUET_NAME)
+message("RESULTS_NAME: ", RESULTS_NAME)
 message("data_long_path: ", data_long_path)
 message("results_dir: ", results_dir)
 message("group_config_file: ", group_config_file)
@@ -352,11 +409,11 @@ if(ALL){
                                         group_cols = group_col,
                                         carry_cols = c("Sex", "Age"))
 
-    dir.create(file.path(out_dir, "alpha_diversity"), 
+    dir.create(file.path(out_dir, "alpha_diversity"),
             recursive = T, showWarnings = F)
-    write.xlsx(alpha_div[[group_col]], file.path(out_dir, 
+    write.xlsx(alpha_div[[group_col]], file.path(out_dir,
                                                 "alpha_diversity", "table.xlsx"))
-    pv <- kruskal.test(reformulate(group_col, response = "richness"), 
+    pv <- kruskal.test(reformulate(group_col, response = "richness"),
                     data = alpha_div[[group_col]])$p.value
 
     svglite::svglite(
@@ -402,10 +459,10 @@ if(ALL){
                                         group_cols = group_col,
                                         carry_cols = c("Sex", "Age"),
                                         ranks = "species")
-    write.xlsx(alpha_div[[group_col]], file.path(out_dir, 
+    write.xlsx(alpha_div[[group_col]], file.path(out_dir,
                                                 "alpha_diversity", "table_species.xlsx"))
     # Calculate and format p-values first
-    pv <- kruskal.test(reformulate(group_col, response = "richness"), 
+    pv <- kruskal.test(reformulate(group_col, response = "richness"),
                     data = alpha_div[[group_col]])$p.value
     svglite::svglite(
     file.path(out_dir, "alpha_diversity", "plot_species.svg"),
@@ -442,7 +499,7 @@ if(ALL){
         vjust = 1,
         hjust = 1
         )
-    ) 
+    )
     p_alpha_sh$layers$geom_boxplot$stat_params$width <- 0.4
     p_alpha_sh$layers$geom_point$position$width <- 0.1
     print(p_alpha_sh)
@@ -454,9 +511,9 @@ if(ALL){
     # ----------------------------------------------------------------------------
     dist_bc <- phiper:::compute_distance(ps, value_col = "exist",
                                         method_normalization = "auto",
-                                        distance = "kulczynski", n_threads = DIST_CORES)                                      
+                                        distance = "kulczynski", n_threads = DIST_CORES)
 
-    dir.create(file.path(out_dir, "beta_diversity"), 
+    dir.create(file.path(out_dir, "beta_diversity"),
             recursive = T, showWarnings = F)
 
 
@@ -475,14 +532,14 @@ if(ALL){
     permanova_res <- phiper:::compute_permanova(dist_bc,
                                                 ps = ps,
                                                 group_col = group_col)
-    saveRDS(permanova_res, file.path(out_dir, 
+    saveRDS(permanova_res, file.path(out_dir,
                                     "beta_diversity", "permanova_results.rds"))
 
 
     disp_res <- phiper:::compute_dispersion(dist_bc,
                                             ps = ps,
                                             group_col = group_col)
-    saveRDS(disp_res, file.path(out_dir, 
+    saveRDS(disp_res, file.path(out_dir,
                                 "beta_diversity", "dispersion_results.rds"))
 
     #print(disp_res)
@@ -499,7 +556,7 @@ if(ALL){
                                     dims = 2L,
                                     perplexity = tsne_perplexity_all,
                                     meta_cols = group_col)
-    openxlsx::write.xlsx(tsne_res, 
+    openxlsx::write.xlsx(tsne_res,
                         file = file.path(out_dir, "beta_diversity", "tsne2d_results.xlsx"),
                         rowNames = TRUE)
 
@@ -526,8 +583,8 @@ if(ALL){
         legend.title = element_text(size = 14),
         legend.text = element_text(size = 13)
         )
-    p_tsne2d$data <- p_tsne2d$data %>% 
-    dplyr::filter(.data[[group_col]] %in% groups) %>% 
+    p_tsne2d$data <- p_tsne2d$data %>%
+    dplyr::filter(.data[[group_col]] %in% groups) %>%
     dplyr::mutate(
         !!group_col := factor(.data[[group_col]], levels = groups)
     )
@@ -540,8 +597,8 @@ if(ALL){
                                     dims = 3L,
                                     perplexity = tsne_perplexity_all,
                                     meta_cols = group_col)
-    tsne_res <- tsne_res %>% 
-    dplyr::filter(.data[[group_col]] %in% groups) %>% 
+    tsne_res <- tsne_res %>%
+    dplyr::filter(.data[[group_col]] %in% groups) %>%
     dplyr::mutate(
         !!group_col := factor(.data[[group_col]], levels = groups)
     )
@@ -711,7 +768,7 @@ if(ALL){
         axis.title = element_text(size = 14),
         legend.position = "none",
         legend.text = element_text(size = 13)
-        ) #+ 
+        ) #+
     # stat_pvalue_manual(
     #     pv,
     #     label = "label",
@@ -792,7 +849,7 @@ for (cmp_idx in seq_along(comparisons)) {
     height = 13/2.54,
     bg = "white"
   )
-  p_enrich <- plot_enrichment_counts(ps_cmp, 
+  p_enrich <- plot_enrichment_counts(ps_cmp,
                                      group_cols = "group_char",
                                      custom_colors = group_palette, annotation_size = 4) +
     labs(title = "Enrichment counts") +
@@ -814,12 +871,12 @@ for (cmp_idx in seq_along(comparisons)) {
                              group_cols = "group_char",
                              carry_cols = carry_cols
                              )
-  
-  dir.create(file.path(out_dir, "alpha_diversity"), 
+
+  dir.create(file.path(out_dir, "alpha_diversity"),
              recursive = T, showWarnings = F)
-  write.xlsx(alpha_div$group_char, file.path(out_dir, 
+  write.xlsx(alpha_div$group_char, file.path(out_dir,
                                              "alpha_diversity", "table.xlsx"))
-  
+
   pv <- compute_alpha_pval(
     data = alpha_div$group_char,
     metric = "richness",
@@ -860,13 +917,13 @@ for (cmp_idx in seq_along(comparisons)) {
   p_alpha$layers$geom_point$position$width <- 0.1
   print(p_alpha)
   dev.off()
-  
+
   # species alpha diversity
   alpha_div <- compute_alpha(ps_cmp,
                              group_cols = "group_char",
                              carry_cols = carry_cols,
                              ranks = "species")
-  write.xlsx(alpha_div$group_char, file.path(out_dir, 
+  write.xlsx(alpha_div$group_char, file.path(out_dir,
                                              "alpha_diversity", "table_species.xlsx"))
   # Calculate and format p-values first
   pv <- compute_alpha_pval(
@@ -975,17 +1032,17 @@ for (cmp_idx in seq_along(comparisons)) {
           dplyr::distinct() %>%
           dplyr::collect(),
         by = "sample_id"
-      ) %>% 
+      ) %>%
       dplyr::mutate(
         level_original = level,
         level = group_char
       )
-    
+
     perplex <- length(disp_res$distances$sample_id) / 2 - 1
-    
+
     beta_meta_cols <- c("group_char", paired_col)
-    
-    
+
+
   } else {
     permanova_res <- phiper:::compute_permanova(
       dist_bc,
@@ -999,14 +1056,14 @@ for (cmp_idx in seq_along(comparisons)) {
       permutations = 9999
     )
     perplex <- length(disp_res$distances$sample_id) - 1
-    
+
     beta_meta_cols <- c("group_char")
   }
-  saveRDS(permanova_res, file.path(out_dir, 
+  saveRDS(permanova_res, file.path(out_dir,
                                    "beta_diversity", "permanova_results.rds"))
-  saveRDS(disp_res, file.path(out_dir, 
+  saveRDS(disp_res, file.path(out_dir,
                               "beta_diversity", "dispersion_results.rds"))
-  
+
   n_axes_pcoa <- max(2L, min(109L, length(disp_res$distances$sample_id) - 1L))
   pcoa_res <- phiper:::compute_pcoa(dist_bc,
                                     neg_correction = "none",
@@ -1021,13 +1078,13 @@ for (cmp_idx in seq_along(comparisons)) {
       copy = TRUE
     )
   saveRDS(pcoa_res, file.path(out_dir, "beta_diversity", "pcoa_results.rds"))
-  
+
   lab_perm <- paste0("PERMANOVA p = ", format_pval(permanova_res$p_adjust),
                      ", R² = ", round(permanova_res$R2, 3)
                      )
   #lab_perm <- paste0("PERMANOVA p = ", format_pval(permanova_res$p_adjust))
   lab_disp <- paste0("Dispersion p = ", format_pval(disp_res$tests$p_adjust))
-  
+
   # PCoA plot with group centroids and ellipses
   svglite::svglite(
     file.path(out_dir, "beta_diversity", "pcoa_plot.svg"),
@@ -1063,15 +1120,15 @@ for (cmp_idx in seq_along(comparisons)) {
       labels = group_n,
       name = NULL
     )
-  
+
   if (!is.null(paired_col)) {
-    
+
     line_data <- pcoa_res$sample_coords %>%
       dplyr::filter(!is.na(.data[[paired_col]])) %>%
       dplyr::group_by(.data[[paired_col]]) %>%
       dplyr::filter(dplyr::n() >= 2) %>%
       dplyr::ungroup()
-    
+
     p_pcoa <- p_pcoa +
       geom_line(
         data = line_data,
@@ -1086,7 +1143,7 @@ for (cmp_idx in seq_along(comparisons)) {
       )
   }
   # if (!is.null(paired_col)) {
-  #   
+  #
   #   label_data <- pcoa_res$sample_coords %>%
   #     dplyr::filter(!is.na(.data[[paired_col]])) %>%
   #     dplyr::group_by(.data[[paired_col]]) %>%
@@ -1096,7 +1153,7 @@ for (cmp_idx in seq_along(comparisons)) {
   #       label = dplyr::first(.data[[paired_col]]),
   #       .groups = "drop"
   #     )
-  #   
+  #
   #   p_pcoa <- p_pcoa +
   #     ggrepel::geom_text_repel(
   #       data = label_data,
@@ -1123,7 +1180,7 @@ for (cmp_idx in seq_along(comparisons)) {
       p_pcoa$layers[[ellipse_idx[j]]]$aes_params$colour <- unname(group_palette[g])
     }
   }
-  
+
   print(p_pcoa)
   dev.off()
 
@@ -1135,7 +1192,7 @@ for (cmp_idx in seq_along(comparisons)) {
     height = 20/2.54,
     bg = "white"
   )
-  
+
   n_axes_scree <- max(2L, min(15L, length(disp_res$distances$sample_id) - 1L))
   p_scree <- phiper:::plot_scree(pcoa_res,
                                  n_axes = n_axes_scree,
@@ -1148,14 +1205,14 @@ for (cmp_idx in seq_along(comparisons)) {
     )
   print(p_scree)
   dev.off()
-  
+
   # dispersion plot ----
   # determine which contrast label actually exists in the dispersion object
   available_contrasts <- unique(disp_res$distances$contrast)
   available_scope <- unique(disp_res$distances$scope)
   # preferred pairwise label: var1 vs var2 (e.g. "control vs MCI")
   pair_contrast <- paste(var1, "vs", var2)
-  
+
   if (pair_contrast %in% available_contrasts) {
     contrast_to_use <- pair_contrast
   } else if ("<global>" %in% available_contrasts) {
@@ -1795,17 +1852,17 @@ for (cmp_idx in seq_along(comparisons)) {
     paired_by <- NULL
     data_frameworks$subject_id <- data_frameworks$sample_id
   }
-    
+
   res <- phiper::compute_delta(
     x                  = data_frameworks,
     exist_col          = "exist",
-    rank_cols          = c("class", "order", "family", "genus", "species"),
+    rank_cols          = RANK_COLS,
     group_cols         = "group_char",
     peptide_library    = peplib,
     B_permutations     = 150000L,
     weight_mode        = "equal", #"n_eff_sqrt",
     stat_mode          = stat_mode,
-    aggregate_stat     = "af",
+    aggregate_stat     = AGGREGATE_STAT,
     winsor_z           = Inf,
     # rank_feature_keep   = list(
     #   phylum  = NULL, class = NULL, order = NULL, family = NULL, genus = NULL,
@@ -1906,12 +1963,14 @@ for (cmp_idx in seq_along(comparisons)) {
     )
   }
   
+
   # ----------------------------------------------------------------------------
   # interesting features: export + per-feature plots
   # ----------------------------------------------------------------------------
   #always_keep <- c("Staphylococcus aureus", "Norwalk virus")
   always_keep <- c()
-  
+
+  # res_filtered <- res_plot %>%
   res_filtered <- res_plot %>%
     dplyr::mutate(
       .force_keep = (.data$feature %in% always_keep) | (.data$rank %in% always_keep)
