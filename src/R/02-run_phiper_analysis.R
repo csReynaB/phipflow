@@ -119,6 +119,15 @@ LOG_FILE <- parse_nullable(get_kv_arg("LOG_FILE", default = NULL))
 ACTIVE_GROUP <- get_kv_arg("ACTIVE_GROUP", required = TRUE)
 PROJECT_DIR  <- get_kv_arg("PROJECT_DIR", required = TRUE)
 PARQUET_NAME <- get_kv_arg("PARQUET_NAME", default = paste0(PROJECT_DIR, ".parquet"))
+OUTPUT_GROUP_MODE <- get_kv_arg("OUTPUT_GROUP_MODE", default = "group_name")
+
+if (!OUTPUT_GROUP_MODE %in% c("group_name", "group_col")) {
+  stop(
+    "OUTPUT_GROUP_MODE must be either 'group_name' or 'group_col'. Got: ",
+    OUTPUT_GROUP_MODE,
+    call. = FALSE
+  )
+}
 
 MANUAL_COMPARISON_FILE <- parse_nullable(
   get_kv_arg("MANUAL_COMPARISON_FILE", default = NULL)
@@ -150,6 +159,7 @@ peptide_library_path <- normalizePath(PEPTIDE_LIBRARY, mustWork = FALSE)
 message("PROJECT_DIR: ", project_dir)
 message("ACTIVE_GROUP: ", ACTIVE_GROUP)
 message("PARQUET_NAME: ", PARQUET_NAME)
+message("OUTPUT_GROUP_MODE: ", OUTPUT_GROUP_MODE)
 message("data_long_path: ", data_long_path)
 message("results_dir: ", results_dir)
 message("group_config_file: ", group_config_file)
@@ -253,9 +263,14 @@ groups <- group_cfg$groups
 comparisons <- group_cfg$comparisons
 longitudinal <- group_cfg$longitudinal
 group_palette <- group_cfg$group_palette
-#group_palette_full <- group_cfg$group_palette_full
+output_group_name <- if (OUTPUT_GROUP_MODE == "group_name") {
+  ACTIVE_GROUP
+} else {
+  group_col
+}
 
 message("group_col: ", group_col)
+message("output_group_name: ", output_group_name)
 message("groups: ", paste(groups, collapse = ", "))
 message("n comparisons: ", length(comparisons))
 
@@ -302,7 +317,7 @@ if (.Platform$OS.type == "windows") {
 if(ALL){
     message("Running analysis on all ", group_col)
 
-    out_dir   <- file.path(results_dir, group_col, "all")
+    out_dir <- file.path(results_dir, output_group_name, "all")
     dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
     # ----------------------------------------------------------------------------
@@ -747,7 +762,7 @@ for (cmp_idx in seq_along(comparisons)) {
   
   # create output directory for this comparison
   label_dir <- paste(var1, "vs.", var2, sep = "_")
-  out_dir   <- file.path(results_dir, group_col, label_dir)
+  out_dir <- file.path(results_dir, output_group_name, label_dir)
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   
   # ----------------------------------------------------------------------------
@@ -1400,18 +1415,19 @@ for (cmp_idx in seq_along(comparisons)) {
       stop("time_col and group_col must be different columns.")
     }
     df_long <- ps_cmp$data_long %>%
-      select(peptide_id, subject_id, sample_id, exist, 
+      dplyr::select(peptide_id, subject_id, sample_id, exist, group_char,
              Timepoint_tmp = all_of(beta_cols$time_col),
              Group_tmp     = all_of(beta_cols$group_col)
       ) %>%
-      filter(!is.na(subject_id), !is.na(sample_id), !is.na(peptide_id)) %>%
-      mutate(
+      dplyr::filter(!is.na(subject_id), !is.na(sample_id), !is.na(peptide_id), !is.na(group_char)) %>%
+      dplyr::mutate(
+        group_char    = as.character(group_char),
         Timepoint_tmp = as.character(Timepoint_tmp),
         Group_tmp     = as.character(Group_tmp),
         exist         = as.integer(exist)
       ) %>%
       collect()
-    
+        
     # Map the two comparison labels to the original group/timepoint components,
     # but preserve the explicit comparison order: var1 first, var2 second.
     comparison_levels <- df_long %>%
@@ -1435,23 +1451,24 @@ for (cmp_idx in seq_along(comparisons)) {
     # x-axis is always var1; y-axis is always var2
     x_title_raw <- comparison_levels$comp_label[1]
     y_title_raw <- comparison_levels$comp_label[2]
-    
+
     # Sample annotation and ordering
     ann_df <- df_long %>%
-      distinct(subject_id, sample_id, group_char, Group_tmp, Timepoint_tmp) %>%
-      mutate(
+      dplyr::distinct(subject_id, sample_id, group_char, Group_tmp, Timepoint_tmp) %>%
+      dplyr::mutate(
         comp_label = paste0(Group_tmp, " at ", Timepoint_tmp)
       ) %>% 
       as.data.frame()
 
     x_samples_df <- ann_df %>%
       dplyr::filter(group_char == var1) %>%
-      arrange(subject_id)
+      dplyr::arrange(subject_id)
 
     y_samples_df <- ann_df %>%
       dplyr::filter(group_char == var2) %>%
-      arrange(subject_id)
+      dplyr::arrange(subject_id)
     
+
     if (!identical(x_samples_df$subject_id, y_samples_df$subject_id)) {
         stop("Subject IDs are not in the same order between the two paired groups: ", 
         var1, " vs ", var2, call. = FALSE)
@@ -1471,6 +1488,7 @@ for (cmp_idx in seq_along(comparisons)) {
         values_from = exist,
         values_fill = 0
       )
+
     peptide_ids <- exist_mat$peptide_id
     exist_mat <- exist_mat %>%
       select(-peptide_id) %>%
@@ -1488,7 +1506,7 @@ for (cmp_idx in seq_along(comparisons)) {
     kulczynski_sim <- 1 - as.matrix(kulczynski_dist)
     kulczynski_sim <- kulczynski_sim[y_samples_df$sample_id, x_samples_df$sample_id, drop = FALSE]
 
-    
+
     plot_df <- as.data.frame(as.table(kulczynski_sim)) %>%
       rename(
         y_sample   = Var1,
@@ -1513,7 +1531,45 @@ for (cmp_idx in seq_along(comparisons)) {
         )
       )
     saveRDS(plot_df, file.path(out_dir, "similarity", "similarity_results.rds"))
-
+    # Full similarity heatmap
+    # p <- ggplot(plot_df, aes(x = x_subject, y = y_subject, fill = similarity)) +
+    #   geom_tile(color = "grey85", linewidth = 0.15) +
+    #   coord_fixed() +
+    #   scale_fill_viridis_c(
+    #     name = "Kulczynski similarity coefficient",
+    #     limits = c(0, 1),
+    #     guide = guide_colorbar(
+    #       title.position = "right",
+    #       title.vjust = 0.5,
+    #       barheight = grid::unit(35, "mm"),
+    #       barwidth  = grid::unit(5, "mm")
+    #     ),
+    #     option = "B",
+    #     direction = -1
+    #   ) +
+    #   labs(
+    #     x = x_title,
+    #     y = y_title
+    #   ) +
+    #   theme_minimal(base_size = 13) +
+    #   theme(
+    #     axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+    #     axis.text.y = element_text(size = 9),
+    #     axis.title.x = element_text(face = "bold", margin = margin(t = 10)),
+    #     axis.title.y = element_text(face = "bold", margin = margin(r = 10)),
+    #     panel.grid = element_blank(),
+    #     
+    #     legend.position = "right",
+    #     legend.title = element_text(
+    #       face = "bold",
+    #       angle = 90,
+    #       hjust = 0.5,
+    #       vjust = 0.5
+    #     ),
+    #     legend.text = element_text(size = 10),
+    #     plot.margin = margin(2, 2, 2, 2)
+    #   )
+    # p
     comp_palette_df <- ann_df %>%
       distinct(comp_label, Group_tmp, Timepoint_tmp) %>%
       mutate(group_key = paste(Group_tmp, Timepoint_tmp, sep = "_"),
@@ -1647,8 +1703,9 @@ for (cmp_idx in seq_along(comparisons)) {
   # ----------------------------------------------------------------------------
   # POP framework
   # ----------------------------------------------------------------------------
-  data_frameworks <- readRDS(file.path(out_dir, paste0(label_dir, "_data.rds")))
+  ranks_tax <- c("family", "genus", "species", "protein_seq_id")
 
+  data_frameworks <- readRDS(file.path(out_dir, paste0(label_dir, "_data.rds")))
   # For non-longitudinal comparisons, force the POP order:
   #   group1 / x-axis = var1
   #   group2 / y-axis = var2
@@ -1662,7 +1719,7 @@ for (cmp_idx in seq_along(comparisons)) {
     )
   } else {
     data_frameworks$group_char <- as.character(data_frameworks$group_char)
-  } 
+  }
   
   dir.create(file.path(out_dir, "POP_framework"), recursive = TRUE,
              showWarnings = FALSE)
@@ -1687,9 +1744,28 @@ for (cmp_idx in seq_along(comparisons)) {
   message("  x / group1 = ", pop_group1)
   message("  y / group2 = ", pop_group2)
 
-  write.csv(pep_tbl, file.path(out_dir, "POP_framework", "single_peptide.csv"))
-  
-  ranks_tax <- c("phylum", "class", "order", "family", "genus", "species")
+  peptide_annotation_lookup <- peplib %>%
+    transmute(
+      peptide_id = trimws(as.character(peptide_id)),
+      protein_annotation = taxon_with_protein_unique_annotation
+      ) %>%
+    filter(
+      !is.na(peptide_id),
+      peptide_id != ""
+    ) %>%
+    distinct(peptide_id, .keep_all = TRUE)
+
+  pep_tbl <- pep_tbl %>%
+    left_join(
+      peptide_annotation_lookup,
+      by = c("feature" = "peptide_id")
+    ) %>%
+    relocate(protein_annotation, .after = feature)
+
+  write.csv(pep_tbl, file.path(out_dir, "POP_framework", "single_peptide.csv"), quote = TRUE, row.names = FALSE)
+  rm(peptide_annotation_lookup)
+  gc()
+
   prev_res_rank <- phiper::compute_pop(
     x                 = data_frameworks,
     exist_col         = "exist",
@@ -1699,8 +1775,39 @@ for (cmp_idx in seq_along(comparisons)) {
     peptide_library   = peplib
   )
   rank_tbl <- extract_tbl(prev_res_rank)
-  write.csv(rank_tbl, file.path(out_dir, "POP_framework", "taxa_ranks.csv"))
   
+  if ("protein_seq_id" %in% ranks_tax) {
+    protein_annotation_lookup <- peplib %>%
+      transmute(
+        protein_seq_id = trimws(as.character(protein_seq_id)),
+        protein_annotation = taxon_with_protein_unique_annotation
+      ) %>%
+      filter(
+        !is.na(protein_seq_id),
+        protein_seq_id != ""
+      ) %>%
+      distinct()
+
+    rank_tbl <- rank_tbl %>%
+      left_join(
+        protein_annotation_lookup,
+        by = c("feature" = "protein_seq_id")
+      ) %>%
+      mutate(
+        protein_annotation = if_else(
+          rank == "protein_seq_id",
+          protein_annotation,
+          NA_character_
+        ) 
+      ) %>%
+      relocate(protein_annotation, .after = feature)
+    rm(protein_annotation_lookup)
+    gc()
+  }
+
+  write.csv(rank_tbl, file.path(out_dir, "POP_framework", "taxa_ranks.csv"), quote = TRUE, row.names = FALSE)
+
+
   ranks_combined <- c(ranks_tax, "peptide_id")
   plots_dir <- file.path(out_dir, "POP_framework", "plots")
   dir.create(plots_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1796,10 +1903,12 @@ for (cmp_idx in seq_along(comparisons)) {
     data_frameworks$subject_id <- data_frameworks$sample_id
   }
     
+
+
   res <- phiper::compute_delta(
     x                  = data_frameworks,
     exist_col          = "exist",
-    rank_cols          = c("class", "order", "family", "genus", "species"),
+    rank_cols          = ranks_tax,
     group_cols         = "group_char",
     peptide_library    = peplib,
     B_permutations     = 150000L,
@@ -1837,35 +1946,132 @@ for (cmp_idx in seq_along(comparisons)) {
   message("  group1 / forest left label  = ", delta_group1)
   message("  group2 / forest right label = ", delta_group2)
 
+
+  res <- res %>% 
+    mutate(
+      direction = case_when(
+          T_obs_stand < 0 ~ paste0("More in ", delta_group1),
+          T_obs_stand > 0 ~ paste0("More in ", delta_group2),
+          TRUE ~ "No direction"
+      ),
+      delta_bin = cut(
+          max_delta * 100,
+          breaks = c(-Inf, 5, 10, 20, 30, Inf),
+          labels = c("0–5%", "5–10%", "10–20%", "20–30%", ">30%"),
+          right = TRUE
+      )
+      #,weighted_score = safe_rescale01(abs(T_obs_stand)) * safe_rescale01(max_delta)
+    ) %>% 
+    dplyr::arrange(
+      desc(abs(T_obs_stand)),
+      desc(max_delta),
+      p_perm
+    )
+
+  #maybe this only for the filtered version ?
+  if ("protein_seq_id" %in% ranks_tax) {
+    protein_annotation_lookup <- peplib %>%
+      transmute(
+        protein_seq_id = trimws(as.character(protein_seq_id)),
+        protein_annotation = taxon_with_protein_unique_annotation
+      ) %>%
+      filter(
+        !is.na(protein_seq_id),
+        protein_seq_id != ""
+      ) %>%
+      distinct()
+
+    res <- res %>%
+      left_join(
+        protein_annotation_lookup,
+        by = c("feature" = "protein_seq_id")
+      ) %>%
+      mutate(
+        protein_annotation = if_else(
+          rank == "protein_seq_id",
+          protein_annotation,
+          NA_character_
+        )
+      ) %>%
+      relocate(protein_annotation, .after = feature)
+    rm(protein_annotation_lookup)
+    gc()
+  }
+
+
   write.csv(res, file = file.path(out_dir, "DELTA_framework",
-                                  "delta_table.csv"))
+                                  "delta_table.csv"), row.names = FALSE, quote = TRUE)
   
-  # optional: save filtered table too
-  res_plot <- res[!is.na(res$m_eff) & res$m_eff > 5, ]
-  write.csv(res_plot, 
-            file = file.path(out_dir, "DELTA_framework", "delta_table_m_eff_gt5.csv"))
+  # save filtered table too
+  res_filtered <- res %>% 
+    dplyr::filter(m_eff > 5, p_perm < 0.05)
+
+  #res_filtered <- res[!is.na(res$m_eff) & res$m_eff > 5, ]
+  write.csv(res_filtered, 
+            file = file.path(out_dir, "DELTA_framework", "delta_table_m_eff_gt5_p_perm_lt0.05.csv"),
+            row.names = FALSE, quote = TRUE)
   
   
-  tax_ranks <- c("domain", "kingdom", "phylum", "class", "order", "family",
-                 "genus", "species")
-  
-  for (taxon in c("order", "family", "genus", "species", "all")){
-    if(taxon %in% "all"){
-      std_idx <- res_plot$rank %in% tax_ranks
-      res_plot$feature[!std_idx] <- as.character(res_plot$rank[!std_idx])
-      res_plot$rank <- taxon
+  for (taxon in c(ranks_tax)){
+    # if(taxon %in% "all"){
+    #   std_idx <- res_filtered$rank %in% tax_ranks
+    #   res_filtered$feature[!std_idx] <- as.character(res_filtered$rank[!std_idx])
+    #   res_filtered$rank <- taxon
+    # }
+
+    if (taxon %in% "protein_seq_id") {
+
+      res_plot <- res_filtered %>%
+        filter(rank == taxon) %>% # filter(!is.na(T_obs_stand), !is.na(max_delta)) %>%
+        filter(
+          !(
+            is.na(protein_annotation) |
+            trimws(protein_annotation) == "" |
+            is.na(feature) |
+            trimws(feature) == ""
+          )
+        ) %>%
+        mutate(
+          weighted_score = safe_rescale01(abs(T_obs_stand)) * safe_rescale01(max_delta),
+          protein_seq_id = feature,
+          feature = protein_annotation,
+          rank = "protein_annotation" 
+        ) %>%
+        select(-protein_annotation) %>%
+        dplyr::arrange(
+          desc(weighted_score)
+        )
+
+        taxon <- "protein_annotation"
+
+        width_p  <- 13
+        height_p <- 9
+
+    } else{
+      res_plot <- res_filtered %>%
+        filter(rank == taxon) %>% #  filter(!is.na(T_obs_stand), !is.na(max_delta)) %>%
+        mutate(
+          weighted_score = safe_rescale01(abs(T_obs_stand)) * safe_rescale01(max_delta)
+        ) %>%
+        select(-protein_annotation) %>%
+        dplyr::arrange(
+          desc(weighted_score)
+        )
+
+      width_p  <- 20/2.54
+      height_p <- 20/2.54
     }
     
     svglite::svglite(
       file.path(out_dir, "DELTA_framework",
                 paste0("significant_static_", taxon, "_forestplot.svg")),
-      width = 20/2.54,
-      height = 20/2.54,
+      width = width_p,
+      height = height_p,
       bg = "white"
     )
     
-    message("Creating forest plot for taxon: ", taxon, ", group1 = ", delta_group1, ", group2 = ", delta_group2)
-   
+    message("Creating forest plot for: ", taxon, ", group1 = ", delta_group1, ", group2 = ", delta_group2)
+
     p_forest_unc <- phiper::forestplot(
       results_tbl          = res_plot,
       rank_of_interest     = taxon,
@@ -1897,43 +2103,203 @@ for (cmp_idx in seq_along(comparisons)) {
 
     p_inter <- p_inter %>% 
       plotly::layout(title = list(text = NULL))
-    
+
     htmlwidgets::saveWidget(
       p_inter,
       file = file.path(out_dir, "DELTA_framework",
                        paste0("significant_interactive_", taxon, "_forestplot.html")),
       selfcontained = TRUE
     )
+    
+
+    if (nrow(res_plot) == 0) {
+    
+      message("No significant ", taxon, " hits found after filtering: m_eff > 5, p_perm < 0.05, rank == '", taxon, "'.")
+      forest_plot <- NULL
+    
+    } else {
+        top_neg <- res_plot %>%
+            filter(T_obs_stand < 0) %>%
+            arrange(desc(weighted_score)) %>%
+            slice_head(n = 15)
+        
+        top_pos <- res_plot %>%
+            filter(T_obs_stand > 0) %>%
+            arrange(weighted_score) %>%
+            slice_tail(n = 15)
+        
+        plot_top <- bind_rows(top_neg, top_pos) %>%
+            #arrange(T_obs_stand) %>%
+            mutate(feature = factor(feature, levels = feature))
+        
+        if (nrow(plot_top) == 0) {
+            
+            message("No directional hits found; all T_obs_stand values may be zero.")
+            forest_plot <- NULL
+            
+        } else {
+            
+            write.csv(plot_top, 
+                file = file.path(out_dir, "DELTA_framework", paste0("delta_table_TOP_", taxon, "_sort_by_maxDelta-Stouffer.csv") ), row.names = FALSE, quote = TRUE)
+
+            svglite::svglite(
+                file.path(out_dir, "DELTA_framework",
+                paste0("significant_static_", taxon, "_forestplot_maxdelta.svg")),
+                width = width_p,
+                height = height_p,
+                bg = "white"
+            )
+
+            col_vals <- setNames(
+            #c("#7570b3", "#2E7D32"),
+            c(group_palette[[as.character(delta_group1)]], 
+            group_palette[[as.character(delta_group2)]]),
+            c(
+                paste0("More in ", delta_group1),
+                paste0("More in ", delta_group2)
+            )
+            )
+            
+            offset <- 0.08
+            
+            plot_top2 <- plot_top %>%
+            mutate(
+                x_start = case_when(
+                T_obs_stand > 0 ~ offset,
+                T_obs_stand < 0 ~ -offset,
+                TRUE ~ 0
+                ),
+                y_pos = as.numeric(feature)
+            )
+            
+            x_left  <- min(plot_top2$T_obs_stand, na.rm = TRUE)
+            x_right <- max(plot_top2$T_obs_stand, na.rm = TRUE)
+            
+            forest_plot <- ggplot(plot_top2, aes(x = T_obs_stand, y = feature)) +
+            geom_vline(
+                xintercept = 0,
+                linetype = "dashed",
+                color = "grey45"
+            ) +
+            scale_y_discrete(
+                expand = expansion(add = c(0.5, 2.0))
+            ) +
+            geom_segment(
+                aes(
+                x = x_start,
+                xend = T_obs_stand,
+                yend = feature,
+                color = direction,
+                alpha = delta_bin
+                ),
+                linewidth = 5,
+                lineend = "round"
+            ) +
+            scale_color_manual(
+                values = col_vals,
+                drop = FALSE
+            ) +
+            scale_alpha_manual(
+                name = "Max. delta",
+                values = c(
+                "0–5%" = 0.20,
+                "5–10%" = 0.40,
+                "10–20%" = 0.60,
+                "20–30%" = 0.80,
+                ">30%" = 1
+                ),
+                drop = TRUE,
+                na.value = 0.5
+            ) +
+            labs(
+                title = paste0("Top ", taxon, " by Stouffer's & max delta"),
+                x = "Stouffer T (permutation-standardized)",
+                y = NULL,
+                color = NULL
+            ) +
+            guides(
+                color = "none",
+                alpha = guide_legend(title = "Max. delta")
+            ) +
+            theme_classic(base_size = 13) +
+            theme(
+                text = element_text(family = "Montserrat"),
+                plot.title = element_text(
+                face = "bold",
+                hjust = 0.5,
+                size = 13,
+                margin = margin(b = 12)
+                ),
+                axis.text.y = element_text(size = 11),
+                axis.text.x = element_text(size = 11),
+                axis.title.x = element_text(face = "bold"),
+                legend.position = c(0.65, 0.3),
+                legend.justification = c(0, 0.5),
+                legend.background = element_rect(fill = NA, color = NA),
+                plot.margin = margin(t = 3, r = 4, b = 3, l = 4)
+            )
+            
+            if (any(plot_top2$T_obs_stand < 0)) {
+            forest_plot <- forest_plot +
+                annotate(
+                "segment",
+                x = -0.05,
+                xend = x_left * 0.85,
+                y = Inf,
+                yend = Inf,
+                arrow = arrow(length = unit(0.18, "cm"), type = "closed"),
+                color = col_vals[paste0("More in ", delta_group1)],
+                linewidth = 0.8
+                ) +
+                annotate(
+                "text",
+                x = x_left / 2,
+                y = Inf,
+                label = paste0("More in ", delta_group1),
+                color = col_vals[paste0("More in ", delta_group1)],
+                fontface = "bold",
+                size = 4,
+                vjust = 1.8
+                )
+            }
+            
+            if (any(plot_top2$T_obs_stand > 0)) {
+            forest_plot <- forest_plot +
+                annotate(
+                "segment",
+                x = 0.05,
+                xend = x_right * 0.85,
+                y = Inf,
+                yend = Inf,
+                arrow = arrow(length = unit(0.18, "cm"), type = "closed"),
+                color = col_vals[paste0("More in ", delta_group2)],
+                linewidth = 0.8
+                ) +
+                annotate(
+                "text",
+                x = x_right / 2,
+                y = Inf,
+                label = paste0("More in ", delta_group2),
+                color = col_vals[paste0("More in ", delta_group2)],
+                fontface = "bold",
+                size = 4,
+                vjust = 1.8
+                )
+            }
+            
+            print(forest_plot)
+            dev.off()
+        }
+    }
+    
   }
   
   # ----------------------------------------------------------------------------
   # interesting features: export + per-feature plots
   # ----------------------------------------------------------------------------
-  #always_keep <- c("Staphylococcus aureus", "Norwalk virus")
-  always_keep <- c()
+
   
-  res_filtered <- res_plot %>%
-    dplyr::mutate(
-      .force_keep = (.data$feature %in% always_keep) | (.data$rank %in% always_keep)
-    ) %>%
-    dplyr::filter(
-      .force_keep | (.data$p_perm < 0.05)
-    ) %>%
-    dplyr::arrange(
-      dplyr::desc(.force_keep),
-      dplyr::desc(.data$T_obs_stand)
-      #dplyr::desc(.data$cross_prev_mean)
-    ) %>%
-    dplyr::select(-.force_keep)
-  
-  write.csv(
-    res_filtered,
-    file      = file.path(out_dir, "DELTA_framework",
-                          "delta_table_interesting.csv"),
-    row.names = FALSE
-  )
-  
-  tax_cols <- intersect(c(tax_ranks), names(peplib))
+  tax_cols <- intersect(c(ranks_tax), names(peplib))
   
   res_with_pep <- res_filtered %>%
     mutate(

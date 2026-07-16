@@ -8,6 +8,7 @@ process RENDER_PHIPER_REPORTS {
     val base_dir
     val project_name
     val group_cols
+    val output_group_mode
     val workflow_src_dir
     val workflow_template
     val use_modules
@@ -38,22 +39,21 @@ process RENDER_PHIPER_REPORTS {
     cd "${base_dir}"
 
     echo "Rendering PHIPER reports"
-    echo "Base dir      : ${base_dir}/${project_name}/results"
-    echo "Group cols    : ${group_cols}"
-    echo "Workflow src  : ${workflow_src_dir}"
-    echo "Template      : ${workflow_template}"
-    echo "Use modules   : ${use_modules}"
+    echo "Base dir          : ${base_dir}/${project_name}/results"
+    echo "Active groups     : ${group_cols}"
+    echo "Output group mode : ${output_group_mode}"
+    echo "Workflow src      : ${workflow_src_dir}"
+    echo "Template          : ${workflow_template}"
+    echo "Use modules       : ${use_modules}"
 
     Rscript --vanilla "${workflow_src_dir}/03-render_phiper_reports.R" \\
       BASE_DIR="${base_dir}/${project_name}/results" \\
       GROUP_COLS="${group_cols}" \\
+      OUTPUT_GROUP_MODE="${output_group_mode}" \\
       PHIPFLOW_SRC="${workflow_src_dir}" \\
       TEMPLATE="${workflow_template}"
 
-    for gc in \$(echo "${group_cols}" | tr ',' ' '); do
-      test -s "${project_name}/results/\${gc}/summary_report_\${gc}.html"
-    done
-
-    echo "${base_dir}/${project_name}/results" > "\${workdir}/render_phiper_reports.${project_name}.done"
+    echo "PHIPER reports finished for project: ${project_name}"
+    echo "DONE: ${project_name} reports" > "\${workdir}/render_phiper_reports.${project_name}.done"
     """
 }

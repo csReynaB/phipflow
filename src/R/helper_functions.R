@@ -548,3 +548,10 @@ make_colored_axis_title <- function(label, color,
   )
 }
   
+
+safe_rescale01 <- function(x) {
+    if (all(is.na(x))) return(rep(NA_real_, length(x)))
+    rng <- range(x, na.rm = TRUE)
+    if (diff(rng) == 0) return(rep(1, length(x)))
+    scales::rescale(x, to = c(0, 1), from = rng)
+}

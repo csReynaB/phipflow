@@ -1,6 +1,6 @@
-# phipflow 
+# phipflow
 
-Version 0.9.0
+Version 1.0
 
 `phipflow` is a Nextflow DSL2 wrapper for running the PHIPER analysis workflow on a server.
 
@@ -606,6 +606,7 @@ This will run all group definitions found in `group_config.R`.
 | `--default_longitudinal` | no | `FALSE` | Passed to `02-run_phiper_analysis.R`. |
 | `--manual_comparison_file` | no | `NULL` | Optional manual comparison file inside `<project_name>/R/`. |
 | `--container` | no | set by `apptainer` profile | Path to the local `.sif` image. |
+| `--output_group_mode` | no | `group_name` | Controls output folder naming (`group_name` or `group_col`) |
 
 ---
 
