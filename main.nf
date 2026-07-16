@@ -19,13 +19,32 @@ include { RENDER_PHIPER_REPORTS } from './modules/local/render_phiper_reports'
  *
  * Meaning of group parameters:
  *   params.group_cols =
- *     group columns to run through 02-run_phiper_analysis.R as ACTIVE_GROUP.
- *     Example:
- *       group_test,group_combined,group_subtype
+ *     group names to run through 02-run_phiper_analysis.R as ACTIVE_GROUP.
+ *
+ *     These can be:
+ *       - metadata column names, e.g. group_test
+ *       - names from group_config.R::group_definitions,
+ *         e.g. group_test_within_timepoints
  *
  *     If null/empty, all entries from:
  *       <base_dir>/<project_name>/R/group_config.R::group_definitions
  *     are used.
+ *
+ *   params.output_group_mode =
+ *     controls how result folders are named.
+ *
+ *     group_name:
+ *       use the ACTIVE_GROUP name.
+ *       This is the recommended default when using group_config.R entries,
+ *       because it keeps different comparison sets separated.
+ *       Example:
+ *         group_test_within_timepoints
+ *
+ *     group_col:
+ *       use the metadata group_col defined inside group_config.R.
+ *       This preserves the older/current behavior.
+ *       Example:
+ *         group_test_Timepoint
  *
  *   params.report_group_cols =
  *     optional override for 03-render_phiper_reports.R as GROUP_COLS.
@@ -130,14 +149,33 @@ Example:
     }
 
     /*
+     * Output folder naming mode.
+     *
+     * group_name = recommended new default.
+     * group_col  = previous/current behavior.
+     */
+
+    def output_group_mode = params.output_group_mode ?: 'group_name'
+
+    if (!(output_group_mode in ['group_name', 'group_col'])) {
+        error """
+Invalid --output_group_mode: ${output_group_mode}
+
+Allowed values:
+  group_name  Use the active group name, e.g. group_test_within_timepoints
+  group_col   Use the metadata group_col, e.g. group_test_Timepoint
+"""
+    }
+
+    /*
      * Pipeline-level reusable paths.
      * These are inside phipflow/, not inside params.base_dir.
      */
 
     def workflow_src_dir  = "${projectDir}/src/R"
     def workflow_template = "${projectDir}/src/template/phiper_summary_report.qmd"
-    def peptide_library = params.peptide_library ?: "${projectDir}/peplib/peptide_library.rds"
-    
+    def peptide_library   = params.peptide_library ?: "${projectDir}/peplib/peptide_library.rds"
+
     /*
      * Project-specific paths.
      * These remain inside params.base_dir/project_name.
@@ -148,7 +186,7 @@ Example:
     def data_dir_path      = file("${params.base_dir}/${params.project_name}/Data")
     def metadata_dir_path  = file("${params.base_dir}/${params.project_name}/Metadata")
     def project_r_dir_path = file("${params.base_dir}/${params.project_name}/R")
-    
+
     def metadata_path      = file("${params.base_dir}/${params.project_name}/Metadata/${params.metadata_file}")
     def exist_path         = file("${params.base_dir}/${params.project_name}/Data/${params.exist_file}")
     def fold_path          = file("${params.base_dir}/${params.project_name}/Data/${params.fold_file}")
@@ -157,8 +195,9 @@ Example:
     /*
      * Optional peptide library path, defaulting to phipflow/peplib/peptide_library.rds
      */
+
     def peptide_library_path = file(peptide_library)
-    
+
     /*
      * Reusable R scripts and QMD template live in phipflow/src.
      */
@@ -190,8 +229,6 @@ Example:
         'helper_functions.R'         : r_helper_path,
         'Quarto template'            : template_path
     ])
-
-   
 
     /*
      * Resolve groups.
@@ -270,6 +307,7 @@ Example:
     log.info "  parquet_name        : ${parquet_name}"
     log.info "  group_cols          : ${group_cols.join(', ')}"
     log.info "  report_group_cols   : ${report_group_cols.join(', ')}"
+    log.info "  output_group_mode   : ${output_group_mode}"
     log.info "  peptide_library     : ${peptide_library}"
     log.info "  rank_cols          : ${rank_cols.join(', ')}"
     log.info "  aggregate_stat     : ${aggregate_stat}"
@@ -278,6 +316,7 @@ Example:
     log.info "  results_dir         : ${params.base_dir}/${params.project_name}/${results_name}"
     log.info "  use_modules         : ${params.use_modules}"
     log.info "  container           : ${params.container ?: 'none'}"
+
     /*
      * 01-create_phiper_object.R
      */
@@ -301,9 +340,16 @@ Example:
      *
      * The object creation marker is combined with the list of group columns,
      * so analysis starts only after the parquet creation step has completed.
+     *
+     * Each group in group_cols is passed as ACTIVE_GROUP.
+     * The output_group_mode parameter controls whether results are written using:
+     *
+     *   group_name = ACTIVE_GROUP
+     *   group_col  = metadata group_col from group_config.R
      */
 
     def analysis_input_ch = CREATE_PHIPER_OBJECT.out.parquet_marker.combine(Channel.fromList(group_cols))
+
     RUN_PHIPER_ANALYSIS(
         analysis_input_ch,
         params.base_dir,
@@ -313,6 +359,7 @@ Example:
         params.default_longitudinal,
         params.manual_comparison_file,
         params.force,
+        output_group_mode,
         workflow_src_dir,
         peptide_library,
         rank_cols.join(','),
@@ -325,7 +372,10 @@ Example:
     /*
      * 03-render_phiper_reports.R
      *
-     * collect() makes rendering wait until all requested group-column analyses finish.
+     * collect() makes rendering wait until all requested group analyses finish.
+     *
+     * report_group_cols is still passed as the group names to render.
+     * output_group_mode tells the render script where to find each result folder.
      */
 
     RENDER_PHIPER_REPORTS(
@@ -333,6 +383,7 @@ Example:
         params.base_dir,
         params.project_name,
         report_group_cols.join(','),
+        output_group_mode,
         workflow_src_dir,
         workflow_template,
         results_name,

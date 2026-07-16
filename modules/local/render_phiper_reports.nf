@@ -8,10 +8,13 @@ process RENDER_PHIPER_REPORTS {
     val base_dir
     val project_name
     val group_cols
+    val output_group_mode
     val workflow_src_dir
     val workflow_template
     val results_name
     val use_modules
+    val delta_min_m_eff
+    val rank_cols
 
     output:
     path "render_phiper_reports.${project_name}.done", emit: report_marker
@@ -41,21 +44,25 @@ process RENDER_PHIPER_REPORTS {
 
     echo "Rendering PHIPER reports"
     echo "Results dir   : \${results_dir}"
-    echo "Group cols    : ${group_cols}"
-    echo "Workflow src  : ${workflow_src_dir}"
-    echo "Template      : ${workflow_template}"
-    echo "Use modules   : ${use_modules}"
+    echo "Active groups     : ${group_cols}"
+    echo "Output group mode : ${output_group_mode}"
+    echo "Workflow src      : ${workflow_src_dir}"
+    echo "Template          : ${workflow_template}"
+    echo "Use modules       : ${use_modules}"
+    echo "Delta minimum effect size : ${delta_min_m_eff}"
+    echo "Rank columns used : ${rank_cols}"
 
     Rscript --vanilla "${workflow_src_dir}/03-render_phiper_reports.R" \\
       BASE_DIR="\${results_dir}" \\
       GROUP_COLS="${group_cols}" \\
+      OUTPUT_GROUP_MODE="${output_group_mode}" \\
       PHIPFLOW_SRC="${workflow_src_dir}" \\
-      TEMPLATE="${workflow_template}"
+      TEMPLATE="${workflow_template} \\
+      DELTA_MIN_M_EFF="${delta_min_m_eff}" \\
+      RANK_COLS="${rank_cols}"
+      "
 
-    for gc in \$(echo "${group_cols}" | tr ',' ' '); do
-      test -s "${project_name}/${results_name}/\${gc}/summary_report_\${gc}.html"
-    done
-
-    echo "\${results_dir}" > "\${workdir}/render_phiper_reports.${project_name}.done"
+    echo "PHIPER reports finished for project: ${project_name}"
+    echo "DONE: ${results_dir} reports" > "\${workdir}/render_phiper_reports.${project_name}.done"
     """
 }

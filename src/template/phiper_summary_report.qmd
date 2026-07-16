@@ -22,7 +22,7 @@ execute:
   message: false
 params:
   base_dir: null # passed at runtime, e.g. "SAR/results"
-  group_col: null # passed at runtime, e.g. "group_test"
+  group_col: null # output group folder name; kept for backwards compatibility
   top_n: 500
   tables_open: false
   include_beta_tables: false
@@ -53,8 +53,11 @@ suppressPackageStartupMessages({
   library(DT)
 })
 
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || is.na(x)) y else x
+
 base_dir  <- params$base_dir
 group_col <- params$group_col
+
 if (is.null(base_dir) || !nzchar(base_dir)) {
   stop("Missing required Quarto parameter: base_dir")
 }
@@ -62,6 +65,7 @@ if (is.null(base_dir) || !nzchar(base_dir)) {
 if (is.null(group_col) || !nzchar(group_col)) {
   stop("Missing required Quarto parameter: group_col")
 }
+
 group_dir <- fs::path(base_dir, group_col)
 
 if (!fs::dir_exists(group_dir)) {
@@ -89,7 +93,6 @@ normalize_interactive_mode <- function(x, default = "link") {
   if (!x %in% c("none", "link", "embed")) default else x
 }
 
-`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || is.na(x)) y else x
 
 pop_interactive_mode   <- normalize_interactive_mode(params$pop_interactive_mode, "link")
 delta_interactive_mode <- normalize_interactive_mode(params$delta_interactive_mode, "link")
@@ -354,6 +357,7 @@ file_or_na <- function(...) {
   if (fs::file_exists(f)) f else NA_character_
 }
 
+
 safe_name <- function(feature_name) {
   x <- gsub("[^A-Za-z0-9_-]+", "_", as.character(feature_name))
   x <- gsub("_+", "_", x)
@@ -361,7 +365,8 @@ safe_name <- function(feature_name) {
   x
 }
 
-delta_ranks <- c("all", "species", "genus", "family", "order")
+
+delta_ranks <- c("protein_annotation", "species", "genus", "family")
 
 find_delta_static_plots <- function(delta_dir, ranks = delta_ranks) {
   files <- fs::path(delta_dir, paste0("significant_static_", ranks, "_forestplot.svg"))
@@ -375,16 +380,30 @@ find_delta_interactive_plots <- function(delta_dir, ranks = delta_ranks) {
   files[fs::file_exists(files)]
 }
 
+# New delta forest plots that combine max-delta and Stouffer T ranking
+find_delta_static_maxdelta_plots <- function(delta_dir, ranks = delta_ranks) {
+  files <- fs::path(delta_dir, paste0("significant_static_", ranks, "_forestplot_maxdelta.svg"))
+  names(files) <- ranks
+  files[fs::file_exists(files)]
+}
 
 emit_delta_forest_tabs <- function(delta_dir,
                                    interactive_mode = "link",
                                    iframe_height = "720px",
                                    include_feature_plots = FALSE,
                                    max_feature_plots = 12) {
+
+  pretty_rank <- function(x) {
+    if (x == "protein_seq_id") return("Protein ID")
+    if (x == "protein_annotation") return("Protein Annotation")
+    stringr::str_to_title(gsub("_", " ", x))
+  }
+
   static_files <- find_delta_static_plots(delta_dir)
   interactive_files <- find_delta_interactive_plots(delta_dir)
+  maxdelta_static_files <- find_delta_static_maxdelta_plots(delta_dir)
 
-  ranks_present <- unique(c(names(static_files), names(interactive_files)))
+  ranks_present <- unique(c(names(static_files), names(interactive_files), names(maxdelta_static_files)))
 
   if (length(ranks_present) == 0) {
     old_static <- file_or_na(delta_dir, "significant_static_forestplot.svg")
@@ -407,17 +426,19 @@ emit_delta_forest_tabs <- function(delta_dir,
   cat_md("::: {.panel-tabset}\n\n")
 
   for (rk in ranks_present) {
-    tab_title <- stringr::str_to_title(rk)
+    tab_title <- pretty_rank(rk)
     emit_heading(tab_title, level = 4)
 
+    # Original Stouffer-based forest plot
     if (rk %in% names(static_files)) {
       emit_img(
         static_files[[rk]],
-        caption = paste(tab_title, "significant forest plot")
+        caption = paste(tab_title, "significant forest plot sorted by Stouffer T")
       )
     } else {
       emit_missing("_Static forest plot not available._")
     }
+
 
     if (rk %in% names(interactive_files)) {
       emit_interactive_html(
@@ -428,6 +449,18 @@ emit_delta_forest_tabs <- function(delta_dir,
       )
     }
 
+    # New max-delta/Stouffer combined forest plot
+    if (rk %in% names(maxdelta_static_files)) {
+      emit_img(
+        maxdelta_static_files[[rk]],
+        caption = paste(tab_title, "significant forest plot sorted by max delta and Stouffer T")
+      )
+    } else {
+      emit_missing("_Max-delta/Stouffer forest plot not available for this rank._")
+    }
+
+
+    # Individual feature plots
     if (isTRUE(include_feature_plots)) {
       emit_heading(
         paste("Top", max_feature_plots, stringr::str_to_title(rk), "individual DELTA feature plots"),
@@ -450,10 +483,11 @@ emit_delta_forest_tabs <- function(delta_dir,
 emit_pop_scatter_tabs <- function(plots_dir,
                                   interactive_mode = "link",
                                   iframe_height = "720px") {
-  pop_ranks <- c("peptide_id", "species", "genus", "family", "order")
+  pop_ranks <- c("peptide_id", "protein_seq_id", "species", "genus", "family")
 
   pretty_rank <- function(x) {
     if (x == "peptide_id") return("Peptide ID")
+    if (x == "protein_seq_id") return("Protein ID")
     stringr::str_to_title(gsub("_", " ", x))
   }
 
@@ -525,53 +559,96 @@ emit_interactive_html <- function(file,
   cat_md('</details>\n\n')
 }
 
+
+
 get_delta_rank_table <- function(delta_dir, rank_name, top_n = 12) {
-  if (rank_name == "all") {
-    tbl_file <- file_or_na(delta_dir, "delta_table_interesting.csv")
-    if (is.na(tbl_file)) return(NULL)
 
-    df <- read_table_auto(tbl_file)
+  # --------------------------------------------------------------------------
+  # 1. Preferred source:
+  #    new top table created only when there is at least one directional hit
+  # --------------------------------------------------------------------------
 
-    if (!"feature" %in% names(df)) return(NULL)
+  top_tbl_file <- file_or_na(
+    delta_dir,
+    paste0("delta_table_TOP_", rank_name, "_sort_by_maxDelta-Stouffer.csv")
+  )
+
+  if (!is.na(top_tbl_file)) {
+    df <- read_table_auto(top_tbl_file)
+
+    if (!"feature" %in% names(df)) {
+      return(NULL)
+    }
 
     if (nrow(df) == 0) {
       return(df)
     }
 
+    df <- df |>
+      dplyr::filter(!is.na(.data$feature), .data$feature != "") |>
+        dplyr::arrange(dplyr::desc(.data$weighted_score))
+
+    return(dplyr::slice_head(df, n = min(top_n, nrow(df))))
+  }
+
+  # --------------------------------------------------------------------------
+  # 2. No max-delta top table found
+  #    This usually means no significant hits were found for this rank.
+  #    But we still try the older fallback tables.
+  # --------------------------------------------------------------------------
+
+  if (rank_name == "all") {
+    fallback_file <- file_or_na(delta_dir, "delta_table_interesting.csv")
+
+    if (is.na(fallback_file)) {
+      return(NULL)
+    }
+
+    df <- read_table_auto(fallback_file)
+
+    if (!"feature" %in% names(df)) {
+      return(NULL)
+    }
+
+    df <- df |>
+      dplyr::filter(!is.na(.data$feature), .data$feature != "")
+
     if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
       df <- df |>
-        dplyr::filter(!is.na(.data$feature), .data$feature != "") |>
         dplyr::arrange(dplyr::desc(abs(.data$T_obs_stand)), .data$p_perm)
     } else if ("p_perm" %in% names(df)) {
       df <- df |>
-        dplyr::filter(!is.na(.data$feature), .data$feature != "") |>
         dplyr::arrange(.data$p_perm)
-    } else {
-      df <- df |>
-        dplyr::filter(!is.na(.data$feature), .data$feature != "")
     }
 
     return(dplyr::slice_head(df, n = min(top_n, nrow(df))))
   }
 
-  tbl_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5.csv")
-  if (is.na(tbl_file)) return(NULL)
+  fallback_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5_p_perm_lt0.05.csv")
 
-  df <- read_table_auto(tbl_file)
+  if (is.na(fallback_file)) {
+    fallback_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5.csv")
+  }
+
+  if (is.na(fallback_file)) {
+    return(NULL)
+  }
+
+  df <- read_table_auto(fallback_file)
 
   needed_cols <- c("rank", "feature")
-  if (!all(needed_cols %in% names(df))) return(NULL)
+  if (!all(needed_cols %in% names(df))) {
+    return(NULL)
+  }
 
   df <- df |>
-    dplyr::filter(.data$rank == rank_name)
+    dplyr::filter(.data$rank == rank_name) |>
+    dplyr::filter(!is.na(.data$feature), .data$feature != "")
 
   if ("p_perm" %in% names(df)) {
     df <- df |>
       dplyr::filter(!is.na(.data$p_perm), .data$p_perm <= 0.05)
   }
-
-  df <- df |>
-    dplyr::filter(!is.na(.data$feature), .data$feature != "")
 
   if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
     df <- df |>
@@ -584,55 +661,151 @@ get_delta_rank_table <- function(delta_dir, rank_name, top_n = 12) {
   dplyr::slice_head(df, n = min(top_n, nrow(df)))
 }
 
+
 emit_delta_feature_plots_for_rank <- function(delta_dir,
                                               rank_name,
                                               top_n = 12) {
   feat_dir <- fs::path(delta_dir, "interesting_features")
-  if (!fs::dir_exists(feat_dir)) return(invisible(NULL))
 
-  rank_tbl <- get_delta_rank_table(delta_dir, rank_name, top_n = top_n)
-  if (is.null(rank_tbl) || nrow(rank_tbl) == 0 || !"feature" %in% names(rank_tbl)) {
+  if (!fs::dir_exists(feat_dir)) {
+    return(invisible(NULL))
+  }
+
+  rank_tbl <- get_delta_rank_table(
+    delta_dir = delta_dir,
+    rank_name = rank_name,
+    top_n = top_n
+  )
+
+  if (
+    is.null(rank_tbl) ||
+      nrow(rank_tbl) == 0 ||
+      !"feature" %in% names(rank_tbl)
+  ) {
     emit_missing("_No significant DELTA features available for this rank._")
     return(invisible(NULL))
   }
 
-  ranked_features <- rank_tbl |>
-    dplyr::pull(.data$feature) |>
-    unique()
+  is_protein_annotation <- identical(
+    rank_name,
+    "protein_annotation"
+  )
+
+  # For protein_annotation tables:
+  #   feature        = annotation shown in the report
+  #   protein_seq_id = identifier used in filenames
+  if (is_protein_annotation) {
+    if (!"protein_seq_id" %in% names(rank_tbl)) {
+      emit_missing(
+        "_The protein annotation table does not contain `protein_seq_id`, so individual plot files cannot be matched._"
+      )
+      return(invisible(NULL))
+    }
+
+    rank_tbl <- rank_tbl |>
+      dplyr::mutate(
+        display_feature = trimws(as.character(.data$feature)),
+        file_feature = trimws(as.character(.data$protein_seq_id))
+      )
+  } else {
+    rank_tbl <- rank_tbl |>
+      dplyr::mutate(
+        display_feature = trimws(as.character(.data$feature)),
+        file_feature = trimws(as.character(.data$feature))
+      )
+  }
+
+  rank_tbl <- rank_tbl |>
+    dplyr::filter(
+      !is.na(.data$display_feature),
+      .data$display_feature != "",
+      !is.na(.data$file_feature),
+      .data$file_feature != ""
+    ) |>
+    dplyr::distinct(.data$file_feature, .keep_all = TRUE)
 
   shown_idx <- 0L
 
-  for (feat in ranked_features) {
-    feat_safe <- safe_name(feat)
+  for (i in seq_len(nrow(rank_tbl))) {
+    file_feature <- rank_tbl$file_feature[[i]]
+    display_feature <- rank_tbl$display_feature[[i]]
 
-    delta_file               <- fs::path(feat_dir, paste0(feat_safe, "_deltaplot_static.svg"))
-    ecdf_file                <- fs::path(feat_dir, paste0(feat_safe, "_ecdfplot_static.svg"))
-    scatter_file             <- fs::path(feat_dir, paste0(feat_safe, "_scatter_static.svg"))
-    scatter_interactive_file <- fs::path(feat_dir, paste0(feat_safe, "_scatter_interactive.html"))
+    # Use protein_seq_id for matching files, e.g. protseq_112XX
+    feat_safe <- safe_name(file_feature)
 
-    has_delta               <- fs::file_exists(delta_file)
-    has_ecdf                <- fs::file_exists(ecdf_file)
-    has_scatter             <- fs::file_exists(scatter_file)
-    has_scatter_interactive <- fs::file_exists(scatter_interactive_file)
+    delta_file <- fs::path(
+      feat_dir,
+      paste0(feat_safe, "_deltaplot_static.svg")
+    )
 
-    if (!(has_delta || has_ecdf || has_scatter || has_scatter_interactive)) next
+    ecdf_file <- fs::path(
+      feat_dir,
+      paste0(feat_safe, "_ecdfplot_static.svg")
+    )
+
+    scatter_file <- fs::path(
+      feat_dir,
+      paste0(feat_safe, "_scatter_static.svg")
+    )
+
+    scatter_interactive_file <- fs::path(
+      feat_dir,
+      paste0(feat_safe, "_scatter_interactive.html")
+    )
+
+    has_delta <- fs::file_exists(delta_file)
+    has_ecdf <- fs::file_exists(ecdf_file)
+    has_scatter <- fs::file_exists(scatter_file)
+    has_scatter_interactive <- fs::file_exists(
+      scatter_interactive_file
+    )
+
+    if (!(
+      has_delta ||
+        has_ecdf ||
+        has_scatter ||
+        has_scatter_interactive
+    )) {
+      next
+    }
 
     shown_idx <- shown_idx + 1L
 
     if (shown_idx == 1L) {
-      cat_md('<details open>\n')
+      cat_md("<details open>\n")
     } else {
-      cat_md('<details>\n')
+      cat_md("<details>\n")
     }
 
-    cat_md(glue('<summary><strong>{htmlEscape(feat)}</strong></summary>\n\n'))
+    # Show annotation prominently, while retaining protein ID
+    if (is_protein_annotation) {
+      summary_label <- glue::glue(
+        "{htmlEscape(display_feature)} ",
+        "<span style=\"font-weight:normal;color:#666;\">",
+        "({htmlEscape(file_feature)})",
+        "</span>"
+      )
+    } else {
+      summary_label <- htmlEscape(display_feature)
+    }
+
+    cat_md(
+      glue::glue(
+        "<summary><strong>{summary_label}</strong></summary>\n\n"
+      )
+    )
+
     cat_md('<div style="margin-top:0.75rem;">\n')
 
-    # First row: Delta + ECDF
-    top_files <- c(delta_file, ecdf_file)[c(has_delta, has_ecdf)]
+    # Use the annotation in the visible captions
+    top_files <- c(
+      delta_file,
+      ecdf_file
+    )[c(has_delta, has_ecdf)]
+
     top_labels <- c(
-      paste0(feat, " — delta plot"),
-      paste0(feat, " — ECDF plot")
+      paste0(display_feature, " — delta plot"),
+      paste0(display_feature, " — ECDF plot")
     )[c(has_delta, has_ecdf)]
 
     if (length(top_files) > 0) {
@@ -643,45 +816,65 @@ emit_delta_feature_plots_for_rank <- function(delta_dir,
       )
     }
 
-    # Static scatter
     if (has_scatter) {
       src <- safe_rel_path(scatter_file)
-      cap <- paste0(feat, " — scatter plot")
+      cap <- paste0(display_feature, " — scatter plot")
 
       cat_md('<div style="margin-top:-0.25rem;">\n')
-      cat_md('<div style="width:100%; aspect-ratio: 1 / 1; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden;">\n')
-      cat_md(glue('<img src="{src}" alt="{htmlEscape(cap)}" style="width:100%; height:100%; object-fit:contain; display:block; background:white;"/>\n'))
-      cat_md('</div>\n')
-      cat_md(glue('<div style="font-size:0.92rem;color:#555;margin-top:0.35rem;">{htmlEscape(cap)}</div>\n'))
-      cat_md('</div>\n\n')
+      cat_md(
+        paste0(
+          '<div style="width:100%; aspect-ratio:1 / 1;',
+          ' border:1px solid #e5e7eb; border-radius:8px;',
+          ' overflow:hidden;">\n'
+        )
+      )
+
+      cat_md(
+        glue::glue(
+          '<img src="{src}" ',
+          'alt="{htmlEscape(cap)}" ',
+          'style="width:100%; height:100%; object-fit:contain;',
+          ' display:block; background:white;"/>\n'
+        )
+      )
+
+      cat_md("</div>\n")
+
+      cat_md(
+        glue::glue(
+          '<div style="font-size:0.92rem;color:#555;',
+          'margin-top:0.35rem;">',
+          "{htmlEscape(cap)}",
+          "</div>\n"
+        )
+      )
+
+      cat_md("</div>\n\n")
     }
 
-    # Direct link to interactive scatter HTML
     if (has_scatter_interactive) {
-      rel_interactive <- safe_rel_path(scatter_interactive_file)
+      rel_interactive <- safe_rel_path(
+        scatter_interactive_file
+      )
+
       cat_md(
-        glue('<p style="margin-top:0.4rem; margin-bottom:0.2rem;">
-             <a href="{rel_interactive}" target="_blank">Open interactive scatter HTML</a>
-             </p>\n\n')
+        glue::glue(
+          '<p style="margin-top:0.4rem; margin-bottom:0.2rem;">',
+          '<a href="{rel_interactive}" target="_blank">',
+          "Open interactive scatter HTML",
+          "</a></p>\n\n"
+        )
       )
     }
 
-    # Interactive scatter link in collapsed block
-    # if (has_scatter_interactive) {
-    #   emit_interactive_html(
-    #     file   = scatter_interactive_file,
-    #     title  = paste(feat, "— interactive scatter plot"),
-    #     mode   = "link",
-    #     height = "720px"
-    #   )
-    # }
-
-    cat_md('</div>\n')
-    cat_md('</details>\n\n')
+    cat_md("</div>\n")
+    cat_md("</details>\n\n")
   }
 
   if (shown_idx == 0L) {
-    emit_missing("_No matching individual DELTA feature plot files found for this rank._")
+    emit_missing(
+      "_No matching individual DELTA feature plot files found for this rank._"
+    )
   }
 
   invisible(NULL)
@@ -697,11 +890,11 @@ phiper_version <- as.character(utils::packageVersion("phiper"))
 cat_md(glue("**PHIPER version:** `{phiper_version}`  \n"))
 base_dir_display <- fs::path_rel(base_dir, start = fs::path_dir(fs::path_dir(base_dir)))
 cat_md(glue("**Base results directory:** `{base_dir_display}`  \n"))
-cat_md(glue("**Group column:** `{group_col}`  \n"))
+cat_md(glue("**Results folder:** `{group_col}`  \n"))
 cat_md(glue("**Comparisons detected:** {length(comparisons)}\n\n"))
 cat_md(paste0("- `", comparisons, "`", collapse = "\n"), "\n\n")
 cat_md(
-  "This report is designed to live **inside the selected group column folder** so that SVG and HTML outputs can be referenced with relative paths.  \n",
+  "This report is designed to live **inside the selected results folder** so that SVG and HTML outputs can be referenced with relative paths.  \n",
   glue("POP interactive mode: `{pop_interactive_mode}`  \n"),
   glue("DELTA interactive mode: `{delta_interactive_mode}`\n\n")
 )
@@ -755,6 +948,8 @@ The POP scatterplots compare prevalence in group 1 vs group 2:
 
 **DELTA framework**  
 The DELTA framework highlights features with the strongest shifts between groups.
+
+Table (delta_table*csv) shows features with their standardized significance difference (Stouffer T, T_obs_stand), raw permutation p-values (p_perm), and max delta (maximum variance in prevalence). The table interesting cols are: T_obs_stand, p_perm and max_delta.
 
 - **Forest plot**: ranked summary of features with strongest standardized differences
 - **Delta plot**: peptide-level shift pattern for one selected feature
@@ -911,16 +1106,9 @@ for (cmp in comparisons) {
 
     if (isTRUE(params$include_delta_tables)) {
       emit_dt_details(
-        file_or_na(delta_dir, "delta_table_m_eff_gt5.csv"),
+        file_or_na(delta_dir, "delta_table_m_eff_gt5_p_perm_lt0.05.csv"),
         "DELTA table (p_perm <= 0.05; m_eff > 5; sorted by absolute T_obs_stand and p_perm)",
-        top_n = 100,
-        filter_fun = function(df) {
-          if ("p_perm" %in% names(df)) {
-            df <- df |>
-              dplyr::filter(!is.na(.data$p_perm), .data$p_perm <= 0.05)
-          }
-          df
-        }
+        top_n = 100
       )
     }
   }

@@ -1,10 +1,10 @@
 process RUN_PHIPER_ANALYSIS {
-    tag "${project_name}:${group_col}"
+    tag "${project_name}:${active_group}"
 
     label 'run_analysis'
 
     input:
-    tuple path(parquet_marker), val(group_col)
+    tuple path(parquet_marker), val(active_group)
     val base_dir
     val project_name
     val parquet_name
@@ -12,6 +12,7 @@ process RUN_PHIPER_ANALYSIS {
     val default_longitudinal
     val manual_comparison_file
     val force
+    val output_group_mode
     val workflow_src_dir
     val peptide_library
     val rank_cols
@@ -21,7 +22,7 @@ process RUN_PHIPER_ANALYSIS {
     val use_modules
   
     output:
-    path "run_phiper_analysis.${project_name}.${group_col}.done", emit: analysis_marker
+    path "run_phiper_analysis.${project_name}.${active_group}.done", emit: analysis_marker
 
     script:
     """
@@ -52,7 +53,8 @@ process RUN_PHIPER_ANALYSIS {
 
     echo "Running PHIPER analysis"
     echo "Project                : ${project_name}"
-    echo "Group column           : ${group_col}"
+    echo "Active group           : ${active_group}"
+    echo "Output group mode      : ${output_group_mode}"
     echo "Parquet                : ${parquet_name}"
     echo "Peptide library        : ${peptide_library}"
     echo "ALL                    : ${all_flag}"
@@ -68,7 +70,8 @@ process RUN_PHIPER_ANALYSIS {
       MAX_GB="\${max_gb}" \\
       LOG=true \\
       FORCE="${force}" \\
-      ACTIVE_GROUP="${group_col}" \\
+      ACTIVE_GROUP="${active_group}" \\
+      OUTPUT_GROUP_MODE="${output_group_mode}" \\
       ALL="${all_flag}" \\
       DEFAULT_LONGITUDINAL="${default_longitudinal}" \\
       PROJECT_DIR="${project_name}" \\
@@ -82,8 +85,7 @@ process RUN_PHIPER_ANALYSIS {
       RESULTS_NAME="${results_name}"
 
     echo "Checking result directory: \${results_dir}"
-    test -d "\${results_dir}"
-
-    echo "\${results_dir}" > "\${workdir}/run_phiper_analysis.${project_name}.${group_col}.done"
+    echo "PHIPER analysis finished for active group: ${active_group}"
+    echo "DONE: ${results_dir} ${active_group}" > "\${workdir}/run_phiper_analysis.${project_name}.${active_group}.done"
     """
 }
