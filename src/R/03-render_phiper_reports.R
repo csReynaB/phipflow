@@ -37,6 +37,16 @@ parse_csv_arg <- function(x) {
   x[nzchar(x)]
 }
 
+parse_csv <- function(x, default = NULL) {
+  if (is.null(x) || !nzchar(trimws(x))) return(default)
+
+  x <- strsplit(x, ",", fixed = TRUE)[[1]]
+  x <- trimws(x)
+  x <- x[nzchar(x)]
+
+  x
+}
+
 
 resolve_output_group_name <- function(active_group, output_group_mode, group_definitions = NULL) {
   if (!output_group_mode %in% c("group_name", "group_col")) {
@@ -65,6 +75,28 @@ base_dir <- get_kv_arg("BASE_DIR", required = TRUE)
 group_cols <- parse_csv_arg(get_kv_arg("GROUP_COLS", required = TRUE))
 OUTPUT_GROUP_MODE <- get_kv_arg("OUTPUT_GROUP_MODE", default = "group_name")
 PHIPFLOW_SRC <- get_kv_arg("PHIPFLOW_SRC", required = TRUE)
+# Add the delta minimum value variable
+DELTA_MIN_M_EFF <- as.numeric(
+  get_kv_arg("DELTA_MIN_M_EFF", default = "5")
+)
+
+RANK_COLS <- parse_csv(
+  get_kv_arg(
+    "RANK_COLS",
+    default = "family,genus,species,protein_seq_id"
+  )
+)
+
+if (is.na(DELTA_MIN_M_EFF) || DELTA_MIN_M_EFF < 0) {
+  stop(
+    "DELTA_MIN_M_EFF must be a non-negative number. Got: ",
+    DELTA_MIN_M_EFF,
+    call. = FALSE
+  )
+}
+
+message("DELTA_MIN_M_EFF: ", DELTA_MIN_M_EFF)
+
 
 template <- get_kv_arg(
   "TEMPLATE",
@@ -173,7 +205,9 @@ for (gc in group_cols) {
         include_delta_feature_plots = TRUE,
         pop_interactive_mode = "link",
         delta_interactive_mode = "embed",
-        max_delta_feature_plots = 5
+        max_delta_feature_plots = 5,
+        min_eff = DELTA_MIN_M_EFF,
+        rank_cols = RANK_COLS
       )
     )
 

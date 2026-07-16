@@ -364,7 +364,7 @@ Allowed values:
         peptide_library,
         rank_cols.join(','),
         aggregate_stat,
-        delta_min_m_eff,
+        params.delta_min_m_eff,
         results_name,
         params.use_modules
     )
@@ -387,6 +387,8 @@ Allowed values:
         workflow_src_dir,
         workflow_template,
         results_name,
-        params.use_modules
+        params.use_modules,
+        params.delta_min_m_eff,
+        rank_cols.join(',')
     )
 }

@@ -57,12 +57,11 @@ process RENDER_PHIPER_REPORTS {
       GROUP_COLS="${group_cols}" \\
       OUTPUT_GROUP_MODE="${output_group_mode}" \\
       PHIPFLOW_SRC="${workflow_src_dir}" \\
-      TEMPLATE="${workflow_template} \\
+      TEMPLATE="${workflow_template}" \\
       DELTA_MIN_M_EFF="${delta_min_m_eff}" \\
       RANK_COLS="${rank_cols}"
-      "
 
     echo "PHIPER reports finished for project: ${project_name}"
-    echo "DONE: ${results_dir} reports" > "\${workdir}/render_phiper_reports.${project_name}.done"
+    echo "DONE: \${results_dir} reports" > "\${workdir}/render_phiper_reports.${project_name}.done"
     """
 }

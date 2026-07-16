@@ -86,6 +86,6 @@ process RUN_PHIPER_ANALYSIS {
 
     echo "Checking result directory: \${results_dir}"
     echo "PHIPER analysis finished for active group: ${active_group}"
-    echo "DONE: ${results_dir} ${active_group}" > "\${workdir}/run_phiper_analysis.${project_name}.${active_group}.done"
+    echo "DONE: \${results_dir} ${active_group}" > "\${workdir}/run_phiper_analysis.${project_name}.${active_group}.done"
     """
 }

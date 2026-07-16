@@ -134,6 +134,7 @@ RESULTS_NAME <- trimws(RESULTS_NAME)
 
 if (!nzchar(RESULTS_NAME) || RESULTS_NAME %in% c(".", "..") || grepl("/", RESULTS_NAME)) {
   stop("RESULTS_NAME must be a simple directory name. Got: ", RESULTS_NAME, call. = FALSE)
+}
 OUTPUT_GROUP_MODE <- get_kv_arg("OUTPUT_GROUP_MODE", default = "group_name")
 
 if (!OUTPUT_GROUP_MODE %in% c("group_name", "group_col")) {
@@ -1832,7 +1833,7 @@ for (cmp_idx in seq_along(comparisons)) {
   )
   rank_tbl <- extract_tbl(prev_res_rank)
   
-  if ("protein_seq_id" %in% ranks_tax) {
+  if ("protein_seq_id" %in% RANK_COLS) {
     protein_annotation_lookup <- peplib %>%
       transmute(
         protein_seq_id = trimws(as.character(protein_seq_id)),
@@ -2064,9 +2065,8 @@ for (cmp_idx in seq_along(comparisons)) {
 
   #res_filtered <- res[!is.na(res$m_eff) & res$m_eff > 5, ]
   write.csv(res_filtered, 
-            file = file.path(out_dir, "DELTA_framework", paste0("delta_table_m_eff_gt", DELTA_MIN_M_EFF, "_p_perm_lt0.05.csv"),
+            file = file.path(out_dir, "DELTA_framework", paste0("delta_table_m_eff_gt", DELTA_MIN_M_EFF, "_p_perm_lt0.05.csv")),
             row.names = FALSE, quote = TRUE)
-            )
   
   
   for (taxon in c(RANK_COLS)){

@@ -36,6 +36,8 @@ params:
   pop_interactive_mode: "link"      # one of: "none", "link", "embed"
   delta_interactive_mode: "embed"    # one of: "none", "link", "embed"
   max_delta_feature_plots: 5
+  min_eff: 5
+  rank_cols: null
 ---
 
 ```{r}
@@ -152,6 +154,16 @@ emit_img_grid <- function(files, labels = NULL, ncol = 2) {
   cat_md('</div>\n\n')
 }
 
+
+parse_csv <- function(x, default = NULL) {
+  if (is.null(x) || !nzchar(trimws(x))) return(default)
+
+  x <- strsplit(x, ",", fixed = TRUE)[[1]]
+  x <- trimws(x)
+  x <- x[nzchar(x)]
+
+  x
+}
 
 emit_iframe <- function(file, height = "700px") {
   if (length(file) == 0 || is.na(file) || !fs::file_exists(file)) {
@@ -365,8 +377,8 @@ safe_name <- function(feature_name) {
   x
 }
 
-
-delta_ranks <- c("protein_annotation", "species", "genus", "family")
+delta_ranks <- params$rank_cols
+delta_ranks[delta_ranks == "protein_seq_id"] <- "protein_annotation"
 
 find_delta_static_plots <- function(delta_dir, ranks = delta_ranks) {
   files <- fs::path(delta_dir, paste0("significant_static_", ranks, "_forestplot.svg"))
@@ -483,7 +495,8 @@ emit_delta_forest_tabs <- function(delta_dir,
 emit_pop_scatter_tabs <- function(plots_dir,
                                   interactive_mode = "link",
                                   iframe_height = "720px") {
-  pop_ranks <- c("peptide_id", "protein_seq_id", "species", "genus", "family")
+
+  pop_ranks <- c("peptide_id", params$rank_cols)
 
   pretty_rank <- function(x) {
     if (x == "peptide_id") return("Peptide ID")
@@ -570,7 +583,7 @@ get_delta_rank_table <- function(delta_dir, rank_name, top_n = 12) {
 
   top_tbl_file <- file_or_na(
     delta_dir,
-    paste0("delta_table_TOP_", rank_name, "_sort_by_maxDelta-Stouffer.csv")
+    paste0("delta_table_m_eff_", params$min_eff,"_TOP_", rank_name, "_sort_by_maxDelta-Stouffer.csv")
   )
 
   if (!is.na(top_tbl_file)) {
@@ -1106,7 +1119,7 @@ for (cmp in comparisons) {
 
     if (isTRUE(params$include_delta_tables)) {
       emit_dt_details(
-        file_or_na(delta_dir, "delta_table_m_eff_gt5_p_perm_lt0.05.csv"),
+        file_or_na(delta_dir, paste0("delta_table_m_eff_gt", params$min_eff, "_p_perm_lt0.05.csv")),
         "DELTA table (p_perm <= 0.05; m_eff > 5; sorted by absolute T_obs_stand and p_perm)",
         top_n = 100
       )
