@@ -1,6 +1,6 @@
 # phipflow
 
-Version 1.0
+Version 1.1.0
 
 `phipflow` is a Nextflow DSL2 wrapper for running the PHIPER analysis workflow on a server.
 
