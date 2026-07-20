@@ -2095,10 +2095,21 @@ for (cmp_idx in seq_along(comparisons)) {
           rank = "protein_annotation" 
         ) %>%
         select(-protein_annotation) %>%
+        # Add protein_seq_id only when an annotation is duplicated
+        group_by(feature) %>%
+        mutate(
+          feature = if (dplyr::n() > 1L) {
+            paste0(feature, " [", protein_seq_id, "]")
+          } else {
+            feature
+          }
+        ) %>%
+        ungroup() %>%
         dplyr::arrange(
           desc(weighted_score)
         )
 
+        
         taxon <- "protein_annotation"
 
         width_p  <- 13

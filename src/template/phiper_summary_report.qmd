@@ -1,8 +1,9 @@
 ---
 title: "PHIPER summary report"
 author: 
-  - name: "Mateusz F. Kolek"
   - name: "Carlos S. Reyna-Blanco"
+  - name: "Mateusz F. Kolek"
+  - name: "Gabriel Innocenti"
 date: today
 date-format: "MMMM D, YYYY"
 description: "Automated PhIP-Seq report for group-level comparison and feature-level interpretation."
@@ -80,11 +81,7 @@ comparisons <- fs::dir_ls(group_dir, type = "directory") |>
   (\(x) x[!grepl("phiper_summary", x)])() |>
   setdiff(ignored_dirs) |>
   sort()
-# comparisons <- fs::dir_ls(group_dir, type = "directory") |>
-#   basename()
-# comparisons <- comparisons[!grepl("phiper_summary", comparisons)]
-# comparisons <- setdiff(comparisons, ignored_dirs)
-# comparisons <- sort(comparisons)
+
 
 if ("all" %in% comparisons) {
   comparisons <- c("all", setdiff(comparisons, "all"))
@@ -226,9 +223,7 @@ prepare_table <- function(df, top_n = params$top_n) {
       df <- df |> arrange(.data$p_adj_rank, .data$p_raw)
     } else if ("p_raw" %in% names(df)) {
       df <- df |> arrange(.data$p_raw)
-    } else if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
-      df <- df |> arrange(desc(abs(.data$T_obs_stand)), .data$p_perm)
-    }
+    } 
   })
 
   dplyr::slice_head(df, n = min(top_n, nrow(df)))
@@ -603,75 +598,6 @@ get_delta_rank_table <- function(delta_dir, rank_name, top_n = 12) {
 
     return(dplyr::slice_head(df, n = min(top_n, nrow(df))))
   }
-
-  # --------------------------------------------------------------------------
-  # 2. No max-delta top table found
-  #    This usually means no significant hits were found for this rank.
-  #    But we still try the older fallback tables.
-  # --------------------------------------------------------------------------
-
-  if (rank_name == "all") {
-    fallback_file <- file_or_na(delta_dir, "delta_table_interesting.csv")
-
-    if (is.na(fallback_file)) {
-      return(NULL)
-    }
-
-    df <- read_table_auto(fallback_file)
-
-    if (!"feature" %in% names(df)) {
-      return(NULL)
-    }
-
-    df <- df |>
-      dplyr::filter(!is.na(.data$feature), .data$feature != "")
-
-    if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
-      df <- df |>
-        dplyr::arrange(dplyr::desc(abs(.data$T_obs_stand)), .data$p_perm)
-    } else if ("p_perm" %in% names(df)) {
-      df <- df |>
-        dplyr::arrange(.data$p_perm)
-    }
-
-    return(dplyr::slice_head(df, n = min(top_n, nrow(df))))
-  }
-
-  fallback_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5_p_perm_lt0.05.csv")
-
-  if (is.na(fallback_file)) {
-    fallback_file <- file_or_na(delta_dir, "delta_table_m_eff_gt5.csv")
-  }
-
-  if (is.na(fallback_file)) {
-    return(NULL)
-  }
-
-  df <- read_table_auto(fallback_file)
-
-  needed_cols <- c("rank", "feature")
-  if (!all(needed_cols %in% names(df))) {
-    return(NULL)
-  }
-
-  df <- df |>
-    dplyr::filter(.data$rank == rank_name) |>
-    dplyr::filter(!is.na(.data$feature), .data$feature != "")
-
-  if ("p_perm" %in% names(df)) {
-    df <- df |>
-      dplyr::filter(!is.na(.data$p_perm), .data$p_perm <= 0.05)
-  }
-
-  if ("T_obs_stand" %in% names(df) && "p_perm" %in% names(df)) {
-    df <- df |>
-      dplyr::arrange(dplyr::desc(abs(.data$T_obs_stand)), .data$p_perm)
-  } else if ("p_perm" %in% names(df)) {
-    df <- df |>
-      dplyr::arrange(.data$p_perm)
-  }
-
-  dplyr::slice_head(df, n = min(top_n, nrow(df)))
 }
 
 
@@ -999,8 +925,6 @@ for (cmp in comparisons) {
     file_or_na(alpha_dir, "plot_species.svg")
   )
   alpha_labels <- c("Peptides alpha diversity plot", "Species alpha diversity plot")
-  #alpha_labels <- c("Peptides alpha diversity plot")
-  #emit_img_grid(alpha_files[!is.na(alpha_files)], alpha_labels[!is.na(alpha_files)], ncol = 1)
   emit_img_grid(alpha_files[!is.na(alpha_files)], alpha_labels[!is.na(alpha_files)], ncol = 2)
 
   if (isTRUE(params$include_alpha_tables)) {
@@ -1120,7 +1044,7 @@ for (cmp in comparisons) {
     if (isTRUE(params$include_delta_tables)) {
       emit_dt_details(
         file_or_na(delta_dir, paste0("delta_table_m_eff_gt", params$min_eff, "_p_perm_lt0.05.csv")),
-        "DELTA table (p_perm <= 0.05; m_eff > 5; sorted by absolute T_obs_stand and p_perm)",
+        paste0("DELTA table (p_perm <= 0.05; m_eff > ", params$min_eff, "; sorted by absolute T_obs_stand, max delta and p_perm)"),
         top_n = 100
       )
     }
