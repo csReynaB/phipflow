@@ -7,7 +7,7 @@ Version 1.1.0
 It automates the full PHIPER workflow:
 
 1. Create a PHIPER parquet object from `exist.csv`, `fold.csv`, and metadata.
-2. Run PHIPER analyses for one or more group columns.
+2. Run PHIPER analyses for one or more group columns with user defined parameters.
 3. Render automated Quarto HTML reports.
 
 The workflow is designed to keep reusable workflow code separate from project data and results.
